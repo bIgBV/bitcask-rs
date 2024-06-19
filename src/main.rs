@@ -60,49 +60,41 @@ impl Cask {
 
     pub fn get<K>(&mut self, key: K) -> Option<Vec<u8>> {
         let mut buf = [0u8; 8];
-        self.file_handle.read_at(&mut buf, 0).unwrap();
+        self.file_handle
+            .read_at(&mut buf, Header::TIMESTAMP_OFFSET)
+            .unwrap();
         let timestamp = u64::from_le_bytes(buf);
         println!("{timestamp}");
 
         let mut buf = [0u8; 2];
         self.file_handle
-            .read_at(&mut buf, mem::size_of::<u64>() as u64)
+            .read_at(&mut buf, Header::KEY_SIZE_OFFSET)
             .unwrap();
         let key_size = u16::from_le_bytes(buf);
-        dbg!(key_size);
 
         let mut buf = [0u8; 4];
         self.file_handle
-            .read_at(
-                &mut buf,
-                (mem::size_of::<u64>() + mem::size_of::<u16>()) as u64,
-            )
+            .read_at(&mut buf, Header::VALUE_SIZE_OFFSET)
             .unwrap();
         let val_size = u32::from_le_bytes(buf);
-        dbg!(val_size);
 
-        let key_offset = mem::size_of::<u64>() + mem::size_of::<u16>() + mem::size_of::<u32>();
         let mut buf = vec![0; key_size.into()];
         self.file_handle
-            .seek(SeekFrom::Start(key_offset as u64))
+            .seek(SeekFrom::Start(Header::KEY_OFFSET))
             .unwrap();
 
-        dbg!(self.file_handle.read_exact(&mut buf)).unwrap();
-        dbg!(&buf);
+        self.file_handle.read_exact(&mut buf).unwrap();
 
         let key = String::from_utf8(buf).unwrap();
         dbg!(key);
 
-        let val_offset = mem::size_of::<u64>()
-            + mem::size_of::<u16>()
-            + mem::size_of::<u32>()
-            + key_size as usize;
+        let val_offset = Header::KEY_OFFSET + key_size as u64;
         self.file_handle
             .seek(SeekFrom::Start(val_offset as u64))
             .unwrap();
         let mut buf = vec![0; val_size.try_into().unwrap()];
 
-        dbg!(self.file_handle.read_exact(&mut buf).unwrap());
+        self.file_handle.read_exact(&mut buf).unwrap();
 
         Some(buf)
     }
@@ -115,6 +107,13 @@ struct Header {
     timestamp: u64,
     key_size: u16,
     value_size: u32,
+}
+
+impl Header {
+    const TIMESTAMP_OFFSET: u64 = 0;
+    const KEY_SIZE_OFFSET: u64 = Header::TIMESTAMP_OFFSET + mem::size_of::<u64>() as u64;
+    const VALUE_SIZE_OFFSET: u64 = Header::KEY_SIZE_OFFSET + mem::size_of::<u16>() as u64;
+    const KEY_OFFSET: u64 = Header::VALUE_SIZE_OFFSET + mem::size_of::<u32>() as u64;
 }
 
 pub trait AsBytes {
