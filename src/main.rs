@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs::{self, File},
+    fs::File,
     io::{Read, Seek, SeekFrom, Write},
     mem,
     os::unix::fs::FileExt,
@@ -58,6 +57,7 @@ impl Cask {
         self.file_handle.write_all(value).unwrap();
     }
 
+    // todo: we can issue a single read to the file by pre-calculating the size of the buffer
     pub fn get<K>(&mut self, key: K) -> Option<Vec<u8>> {
         let mut buf = [0u8; 8];
         self.file_handle
@@ -103,6 +103,8 @@ impl Cask {
 #[derive(Debug)]
 #[repr(C)]
 /// Database entry header
+///
+///
 struct Header {
     timestamp: u64,
     key_size: u16,
