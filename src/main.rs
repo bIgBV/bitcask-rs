@@ -1,14 +1,16 @@
+mod fs;
+
 use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom, Write},
     mem,
-    os::unix::fs::FileExt,
-    time::SystemTime,
+    time::{SystemTime, SystemTimeError},
 };
+
+use bytemuck::{Pod, PodCastError, Zeroable};
+use fs::{Fs, FsError, Offset};
 
 fn main() {
     let mut cask = Cask::new().unwrap();
-    cask.insert("hello", "world 🧏‍♀️");
+    cask.insert("hello", "world 🧏‍♀️").unwrap();
     let result = cask.get("hello").unwrap();
 
     let val = String::from_utf8(result).unwrap();
@@ -16,99 +18,62 @@ fn main() {
 }
 
 struct Cask {
-    file_handle: File,
+    fs: Fs,
     position: u64,
 }
 
 impl Cask {
     fn new() -> Result<Self, ()> {
-        let path = format!("./active.db");
-        let file = File::create_new(path).unwrap();
-
         Ok(Cask {
-            file_handle: file,
+            fs: Fs::new(),
             position: 0,
         })
     }
 
-    pub fn insert<K, V>(&mut self, key: K, value: V)
+    pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<Offset, CaskError>
     where
-        K: AsBytes,
-        V: AsBytes,
+        K: StoredData,
+        V: StoredData,
     {
-        let header = encode(&key, &value);
-        let key = key.as_bytes();
-        let value = value.as_bytes();
+        let header = encode(&key, &value)?;
 
-        self.file_handle
-            .seek(SeekFrom::Start(self.position))
-            .unwrap();
+        let entry = Entry::new(header, key, value);
 
-        self.file_handle
-            .write_all(&header.timestamp.to_le_bytes())
-            .unwrap();
-        self.file_handle
-            .write_all(&header.key_size.to_le_bytes())
-            .unwrap();
-        self.file_handle
-            .write_all(&header.value_size.to_le_bytes())
-            .unwrap();
-        self.file_handle.write_all(key).unwrap();
-        self.file_handle.write_all(value).unwrap();
+        Ok(self.fs.write_entry(entry)?)
     }
 
-    // todo: we can issue a single read to the file by pre-calculating the size of the buffer
-    pub fn get<K>(&mut self, key: K) -> Option<Vec<u8>> {
-        let mut buf = [0u8; 8];
-        self.file_handle
-            .read_at(&mut buf, Header::TIMESTAMP_OFFSET)
-            .unwrap();
-        let timestamp = u64::from_le_bytes(buf);
-        println!("{timestamp}");
+    pub fn get<K>(&mut self, key: K) -> Result<Vec<u8>, CaskError> {
+        let mut buf = [0u8; Header::LEN as usize];
+        self.fs.get_chunk(Offset(0), &mut buf)?;
+        let header: &Header = bytemuck::try_from_bytes(&buf).map_err(CaskError::Cast)?;
 
-        let mut buf = [0u8; 2];
-        self.file_handle
-            .read_at(&mut buf, Header::KEY_SIZE_OFFSET)
-            .unwrap();
-        let key_size = u16::from_le_bytes(buf);
+        let data_len = header.value_size.saturating_add(header.key_size as u32);
+        let mut buf = vec![0u8; data_len as usize];
+        self.fs.get_chunk(Offset(Header::LEN as usize), &mut buf)?;
 
-        let mut buf = [0u8; 4];
-        self.file_handle
-            .read_at(&mut buf, Header::VALUE_SIZE_OFFSET)
-            .unwrap();
-        let val_size = u32::from_le_bytes(buf);
-
-        let mut buf = vec![0; key_size.into()];
-        self.file_handle
-            .seek(SeekFrom::Start(Header::KEY_OFFSET))
-            .unwrap();
-
-        self.file_handle.read_exact(&mut buf).unwrap();
-
-        let key = String::from_utf8(buf).unwrap();
-        dbg!(key);
-
-        let val_offset = Header::KEY_OFFSET + key_size as u64;
-        self.file_handle
-            .seek(SeekFrom::Start(val_offset as u64))
-            .unwrap();
-        let mut buf = vec![0; val_size.try_into().unwrap()];
-
-        self.file_handle.read_exact(&mut buf).unwrap();
-
-        Some(buf)
+        Ok(buf)
     }
 }
 
-#[derive(Debug)]
-#[repr(C)]
+#[derive(thiserror::Error, Debug)]
+pub enum CaskError {
+    #[error("Error interacting with the filesystem: {0}")]
+    Fs(#[from] FsError),
+
+    #[error("Error casting value: {0}")]
+    Cast(PodCastError),
+
+    #[error("Encoding error: {0}")]
+    Encode(#[from] SystemTimeError),
+}
+
 /// Database entry header
-///
-///
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed)]
 struct Header {
     timestamp: u64,
-    key_size: u16,
     value_size: u32,
+    key_size: u16,
 }
 
 impl Header {
@@ -116,28 +81,29 @@ impl Header {
     const KEY_SIZE_OFFSET: u64 = Header::TIMESTAMP_OFFSET + mem::size_of::<u64>() as u64;
     const VALUE_SIZE_OFFSET: u64 = Header::KEY_SIZE_OFFSET + mem::size_of::<u16>() as u64;
     const KEY_OFFSET: u64 = Header::VALUE_SIZE_OFFSET + mem::size_of::<u32>() as u64;
+    const LEN: u64 = mem::size_of::<Header>() as u64;
 }
 
-pub trait AsBytes {
+pub trait StoredData {
     fn as_bytes(&self) -> &[u8];
 }
 
-impl AsBytes for String {
+impl StoredData for String {
     fn as_bytes(&self) -> &[u8] {
         self.as_bytes()
     }
 }
 
-impl AsBytes for &str {
+impl StoredData for &str {
     fn as_bytes(&self) -> &[u8] {
         str::as_bytes(&self)
     }
 }
 
-fn encode<K, V>(key: &K, value: &V) -> Header
+fn encode<K, V>(key: &K, value: &V) -> Result<Header, CaskError>
 where
-    K: AsBytes,
-    V: AsBytes,
+    K: StoredData,
+    V: StoredData,
 {
     // TODO: calling as_bytes everytime might be costly
     let key_len = key.as_bytes().len();
@@ -148,13 +114,24 @@ where
 
     // TODO: This needs to be made deterministic for tests
     let timestamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
 
-    Header {
+    Ok(Header {
         key_size: key_len as u16,
         value_size: val_len as u32,
         timestamp,
+    })
+}
+
+pub struct Entry<K, V> {
+    header: Header,
+    key: K,
+    value: V,
+}
+
+impl<K, V> Entry<K, V> {
+    fn new(header: Header, key: K, value: V) -> Self {
+        Entry { header, key, value }
     }
 }
