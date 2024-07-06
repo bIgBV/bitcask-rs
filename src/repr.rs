@@ -3,7 +3,7 @@ use std::{
     time::{SystemTime, SystemTimeError},
 };
 
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{bytes_of, Pod, Zeroable};
 
 /// Database entry header
 ///
@@ -29,6 +29,10 @@ impl Header {
     /// This will be encoded as |key|value|
     pub fn data_size(&self) -> usize {
         (self.value_size.saturating_add(self.key_size as u32)) as usize
+    }
+
+    pub fn serialize(&self) -> &[u8] {
+        bytes_of(self)
     }
 }
 
@@ -86,6 +90,14 @@ impl<'entry> Entry<'entry> {
             key,
             value: val,
         })
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        [self.header.serialize(), self.key, self.value].concat()
+    }
+
+    pub fn len(&self) -> usize {
+        (Header::LEN + self.header.key_size as u64 + self.header.value_size as u64) as usize
     }
 }
 

@@ -25,6 +25,7 @@ impl Cask {
         })
     }
 
+    /// Inserts a new entry into the data store
     pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<Offset, CaskError>
     where
         K: StoredData,
@@ -35,6 +36,7 @@ impl Cask {
         Ok(self.fs.write_entry(entry)?)
     }
 
+    /// Gets an entry from the data store if it's present
     pub fn get<K>(&mut self, key: K) -> Result<Vec<u8>, CaskError> {
         let mut buf = [0u8; Header::LEN as usize];
         self.fs.get_chunk(Offset(0), &mut buf)?;
