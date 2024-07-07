@@ -6,10 +6,7 @@ use std::{
 
 use tracing::{info, instrument};
 
-use super::{
-    repr::{Entry, Header},
-    CacheEntry,
-};
+use super::{repr::Entry, CacheEntry};
 
 /// An offset of an entry in a data file
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]

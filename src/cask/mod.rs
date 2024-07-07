@@ -52,11 +52,11 @@ impl<K> Cask<K> {
     }
 
     /// Gets an entry from the data store if it's present
-    pub fn get(&mut self, key: K) -> Result<Vec<u8>, CaskError>
+    pub fn get(&self, key: &K) -> Result<Vec<u8>, CaskError>
     where
         K: Hash + Eq,
     {
-        let Some(cache_entry) = self.keydir.get(&key) else {
+        let Some(cache_entry) = self.keydir.get(key) else {
             return Err(CaskError::NotFound);
         };
 
