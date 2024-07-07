@@ -12,7 +12,7 @@ use bytemuck::{bytes_of, Pod, Zeroable};
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C, packed)]
 pub(in crate::cask) struct Header {
-    timestamp: u64,
+    pub timestamp: u64,
     pub value_size: u32,
     pub key_size: u16,
 }
@@ -62,7 +62,6 @@ impl<'entry> Entry<'entry> {
         K: StoredData,
         V: StoredData,
     {
-        // TODO: calling as_bytes everytime might be costly
         let key = key.as_bytes();
         let val = value.as_bytes();
 

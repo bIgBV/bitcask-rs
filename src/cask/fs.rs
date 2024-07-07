@@ -6,17 +6,21 @@ use std::{
 
 use tracing::{info, instrument};
 
-use super::repr::Entry;
+use super::{
+    repr::{Entry, Header},
+    CacheEntry,
+};
+
+/// An offset of an entry in a data file
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Offset(pub usize);
 
 /// Provides a convenient way to interface with the file system
 #[derive(Debug)]
 pub(crate) struct Fs {
     active: File,
+    cursor: usize,
 }
-
-/// An offset of an entry in a data file
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Offset(pub usize);
 
 impl Fs {
     pub fn new(path: &str) -> Result<Self, FsError> {
@@ -29,19 +33,29 @@ impl Fs {
 
         Ok(Fs {
             active: active_file,
+            cursor: 0,
         })
     }
 
     #[instrument(skip(self), fields(entry.header))]
-    pub fn write_entry<'entry>(&mut self, entry: Entry<'entry>) -> Result<Offset, FsError> {
+    pub fn write_entry<'entry>(&mut self, entry: Entry<'entry>) -> Result<CacheEntry, FsError> {
         info!(
             size = entry.len(),
             "Inserting entry into current active file"
         );
         let buf = entry.serialize();
-        // TODO(bhargav): Actually manage offsets into the file
-        self.active.write(&buf)?;
-        Ok(Offset(entry.len()))
+        let current = Offset(self.cursor);
+        // Active file is opened in write mode. Therefore all writes are always appended to the
+        // file.
+        let offset = self.active.write(&buf)?;
+
+        // Update our cursor into the active file
+        self.cursor += offset;
+        Ok(CacheEntry {
+            value_size: entry.header.value_size,
+            offset: current,
+            timestamp: entry.header.timestamp,
+        })
     }
 
     #[instrument(skip(self, buf))]
