@@ -11,17 +11,13 @@ use bytemuck::{bytes_of, Pod, Zeroable};
 /// stored in a cache senstivie manner.
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C, packed)]
-pub struct Header {
+pub(in crate::cask) struct Header {
     timestamp: u64,
-    value_size: u32,
-    key_size: u16,
+    pub value_size: u32,
+    pub key_size: u16,
 }
 
 impl Header {
-    const TIMESTAMP_OFFSET: u64 = 0;
-    const KEY_SIZE_OFFSET: u64 = Header::TIMESTAMP_OFFSET + mem::size_of::<u64>() as u64;
-    const VALUE_SIZE_OFFSET: u64 = Header::KEY_SIZE_OFFSET + mem::size_of::<u16>() as u64;
-    const KEY_OFFSET: u64 = Header::VALUE_SIZE_OFFSET + mem::size_of::<u32>() as u64;
     pub const LEN: u64 = mem::size_of::<Header>() as u64;
 
     /// The size of the data field in this entry
@@ -52,8 +48,10 @@ impl StoredData for &str {
     }
 }
 
+/// Represents an entry in a data file.
+#[derive(Debug)]
 pub struct Entry<'entry> {
-    header: Header,
+    pub(in crate::cask) header: Header,
     key: &'entry [u8],
     value: &'entry [u8],
 }
