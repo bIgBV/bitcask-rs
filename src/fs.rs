@@ -1,6 +1,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, Write},
+    os::unix::fs::FileExt,
 };
 
 use crate::Entry;
@@ -16,11 +17,12 @@ pub struct Offset(pub usize);
 
 impl Fs {
     pub fn new(path: &str) -> Result<Self, FsError> {
+        let path = format!("{path}/active.db");
         let active_file = OpenOptions::new()
             .create(true)
             .append(true)
             .read(true)
-            .open(path)?;
+            .open(&path)?;
 
         Ok(Fs {
             active: active_file,
@@ -35,8 +37,11 @@ impl Fs {
         Ok(Offset(entry.len()))
     }
 
+    // Reads a chunk the size of the given buffer into the active file at the provided offset
     pub fn get_chunk(&self, offset: Offset, buf: &mut [u8]) -> Result<(), FsError> {
-        todo!()
+        self.active.read_exact_at(buf, offset.0 as u64)?;
+
+        Ok(())
     }
 }
 

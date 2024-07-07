@@ -92,6 +92,8 @@ impl<'entry> Entry<'entry> {
         })
     }
 
+    // TODO: Allocating a whole vector for the entry is wasteful. We should be able to write the
+    // whole structure to the file somehow.
     pub fn serialize(&self) -> Vec<u8> {
         [self.header.serialize(), self.key, self.value].concat()
     }

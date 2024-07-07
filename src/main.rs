@@ -41,6 +41,7 @@ impl Cask {
         let mut buf = [0u8; Header::LEN as usize];
         self.fs.get_chunk(Offset(0), &mut buf)?;
         let header: &Header = bytemuck::try_from_bytes(&buf).map_err(CaskError::Cast)?;
+        println!("{header:?}");
 
         let data_len = header.data_size();
         let mut buf = vec![0u8; data_len as usize];
