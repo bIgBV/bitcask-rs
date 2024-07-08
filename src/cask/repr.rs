@@ -13,8 +13,8 @@ use bytemuck::{bytes_of, Pod, Zeroable};
 #[repr(C, packed)]
 pub(in crate::cask) struct Header {
     pub timestamp: u64,
-    pub value_size: u32,
     pub key_size: u16,
+    pub value_size: u32,
 }
 
 impl Header {
@@ -25,6 +25,11 @@ impl Header {
     /// This will be encoded as |key|value|
     pub fn data_size(&self) -> usize {
         (self.value_size.saturating_add(self.key_size as u32)) as usize
+    }
+
+    /// Total size of an entry associated with this header
+    pub fn entry_size(&self) -> usize {
+        Header::LEN as usize + self.data_size()
     }
 
     pub fn serialize(&self) -> &[u8] {
@@ -50,14 +55,14 @@ impl StoredData for &str {
 
 /// Represents an entry in a data file.
 #[derive(Debug)]
-pub struct Entry<'entry> {
+pub struct Entry<'input> {
     pub(in crate::cask) header: Header,
-    key: &'entry [u8],
-    value: &'entry [u8],
+    key: &'input [u8],
+    value: &'input [u8],
 }
 
-impl<'entry> Entry<'entry> {
-    pub fn new_encoded<K, V>(key: &'entry K, value: &'entry V) -> Result<Entry<'entry>, EntryError>
+impl<'input> Entry<'input> {
+    pub fn new_encoded<K, V>(key: &'input K, value: &'input V) -> Result<Entry<'input>, EntryError>
     where
         K: StoredData,
         V: StoredData,

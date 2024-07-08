@@ -14,7 +14,7 @@ pub struct Offset(pub usize);
 
 /// Provides a convenient way to interface with the file system
 #[derive(Debug)]
-pub(crate) struct Fs {
+pub(in crate::cask) struct Fs {
     active: File,
     cursor: usize,
 }
@@ -34,18 +34,19 @@ impl Fs {
         })
     }
 
-    #[instrument(skip(self), fields(entry.header))]
+    #[instrument(skip(self, entry), fields(entry.header))]
     pub fn write_entry<'entry>(&mut self, entry: Entry<'entry>) -> Result<CacheEntry, FsError> {
         info!(
-            size = entry.len(),
+            entry_size = entry.len(),
             "Inserting entry into current active file"
         );
         let buf = entry.serialize();
-        let current = Offset(self.cursor);
+
         // Active file is opened in write mode. Therefore all writes are always appended to the
         // file.
         let offset = self.active.write(&buf)?;
 
+        let current = Offset(self.cursor);
         // Update our cursor into the active file
         self.cursor += offset;
         Ok(CacheEntry {
@@ -55,13 +56,18 @@ impl Fs {
         })
     }
 
-    #[instrument(skip(self, buf))]
-    // Reads a chunk the size of the given buffer into the active file at the provided offset
+    #[instrument(skip(self, buf), fields(read_size=buf.len()))]
+    /// Reads a chunk the size of the given buffer into the active file at the provided offset
     pub fn get_chunk(&self, offset: Offset, buf: &mut [u8]) -> Result<(), FsError> {
         info!("Reading chunk from active file");
         self.active.read_exact_at(buf, offset.0 as u64)?;
 
         Ok(())
+    }
+
+    pub fn active_size(&self) -> Result<u64, FsError> {
+        let metadata = self.active.metadata()?;
+        Ok(metadata.len())
     }
 }
 
