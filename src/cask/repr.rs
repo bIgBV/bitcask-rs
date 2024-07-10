@@ -12,12 +12,17 @@ use bytemuck::{bytes_of, Pod, Zeroable};
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C, packed)]
 pub(in crate::cask) struct Header {
+    // todo: we're using unix timestamps, so we should be able to pack tombstone information into
+    // the higher order bits of a u64
+    pub tombstone: u8,
     pub timestamp: u64,
     pub key_size: u16,
     pub value_size: u32,
 }
 
 impl Header {
+    pub const IS_DELETED: u8 = 1;
+    pub const NOT_DELETED: u8 = 0;
     pub const LEN: u64 = mem::size_of::<Header>() as u64;
 
     /// The size of the data field in this entry
@@ -58,7 +63,7 @@ impl StoredData for &str {
 pub struct Entry<'input> {
     pub(in crate::cask) header: Header,
     key: &'input [u8],
-    value: &'input [u8],
+    value: Option<&'input [u8]>,
 }
 
 impl<'input> Entry<'input> {
@@ -82,6 +87,7 @@ impl<'input> Entry<'input> {
             .as_secs();
 
         let header = Header {
+            tombstone: Header::NOT_DELETED,
             key_size: key_len as u16,
             value_size: val_len as u32,
             timestamp,
@@ -89,15 +95,39 @@ impl<'input> Entry<'input> {
 
         Ok(Entry {
             header,
-            key,
-            value: val,
+            key: key,
+            value: Some(val),
         })
+    }
+
+    /// Creates an empty tombstone entry for deleted values
+    pub fn new_empty<K>(key: &'input K) -> Entry<'input>
+    where
+        K: StoredData,
+    {
+        let key = key.as_bytes();
+        debug_assert!(key.len() < u16::MAX.into());
+        Entry {
+            header: Header {
+                tombstone: Header::IS_DELETED,
+                timestamp: 0,
+                key_size: key.len() as u16,
+                value_size: 0,
+            },
+            key,
+            value: None,
+        }
     }
 
     // TODO: Allocating a whole vector for the entry is wasteful. We should be able to write the
     // whole structure to the file somehow.
     pub fn serialize(&self) -> Vec<u8> {
-        [self.header.serialize(), self.key, self.value].concat()
+        [
+            self.header.serialize(),
+            self.key,
+            self.value.unwrap_or_else(|| &[]),
+        ]
+        .concat()
     }
 
     pub fn len(&self) -> usize {

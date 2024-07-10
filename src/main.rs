@@ -1,9 +1,14 @@
 mod cask;
 
+use tracing::Level;
+
 use crate::cask::Cask;
 
 fn main() {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+
     let mut cask = Cask::new("./").unwrap();
 
     for i in 0..10 {
