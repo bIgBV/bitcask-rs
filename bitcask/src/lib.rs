@@ -24,6 +24,7 @@ impl CacheEntry {
 
 pub struct Cask {
     fs: Fs,
+    // This can be a RwLock
     keydir: Mutex<HashMap<Vec<u8>, CacheEntry>>,
 }
 
@@ -106,7 +107,7 @@ impl Cask {
     }
 
     /// Delete an entry from the data store
-    pub fn remove<K>(&self, key: &K) -> Result<(), CaskError>
+    pub fn remove<K>(&mut self, key: &K) -> Result<(), CaskError>
     where
         K: StoredData + Hash + Eq,
     {
