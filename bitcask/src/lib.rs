@@ -1,17 +1,12 @@
 mod fs;
 mod repr;
 
-use std::{collections::HashMap, hash::Hash, sync::RwLock};
+use std::{collections::HashMap, hash::Hash, sync::Mutex};
 
 use bytemuck::PodCastError;
 use fs::{Fs, FsError, Offset};
 use repr::{Entry, EntryError, Header, StoredData};
 use tracing::{debug, info, instrument};
-
-pub struct Cask {
-    fs: Fs,
-    keydir: HashMap<Vec<u8>, RwLock<CacheEntry>>,
-}
 
 // todo add file ids
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -25,6 +20,11 @@ impl CacheEntry {
     pub fn data_offset(&self) -> Offset {
         Offset(self.offset.0 + Header::LEN as usize)
     }
+}
+
+pub struct Cask {
+    fs: Fs,
+    keydir: Mutex<HashMap<Vec<u8>, CacheEntry>>,
 }
 
 impl Cask {
@@ -45,7 +45,7 @@ impl Cask {
 
             for entry in iterator {
                 let (key, cache_entry) = entry?;
-                map.insert(key, RwLock::new(cache_entry));
+                map.insert(key, cache_entry);
             }
 
             map
@@ -53,11 +53,14 @@ impl Cask {
             HashMap::new()
         };
 
-        Ok(Cask { fs, keydir })
+        Ok(Cask {
+            fs,
+            keydir: Mutex::new(keydir),
+        })
     }
 
     /// Inserts a new entry into the data store
-    pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<(), CaskError>
+    pub fn insert<K, V>(&self, key: K, value: V) -> Result<(), CaskError>
     where
         K: StoredData + Hash + Eq,
         V: StoredData,
@@ -70,9 +73,11 @@ impl Cask {
         let key = key.as_bytes().into();
 
         self.keydir
+            .lock()
+            .expect("Unable to lock hashmap mutex")
             .entry(key)
-            .and_modify(|cache_entry| *cache_entry.write().unwrap() = entry.clone())
-            .or_insert_with(|| RwLock::new(entry));
+            .and_modify(|cache_entry| *cache_entry = entry.clone())
+            .or_insert_with(|| entry);
 
         Ok(())
     }
@@ -82,13 +87,10 @@ impl Cask {
     where
         K: StoredData + Hash + Eq,
     {
-        let Some(cache_entry) = self.keydir.get(key.as_bytes()) else {
+        let entry = self.keydir.lock().unwrap();
+        let Some(cache_entry) = entry.get(key.as_bytes()) else {
             return Err(CaskError::NotFound);
         };
-
-        let cache_entry = cache_entry
-            .read()
-            .expect("Unable to obtain read lock for entry");
 
         let mut buf = [0u8; Header::LEN as usize];
         self.fs.get_chunk(cache_entry.offset, &mut buf)?;
@@ -104,7 +106,7 @@ impl Cask {
     }
 
     /// Delete an entry from the data store
-    pub fn remove<K>(&mut self, key: &K) -> Result<(), CaskError>
+    pub fn remove<K>(&self, key: &K) -> Result<(), CaskError>
     where
         K: StoredData + Hash + Eq,
     {
@@ -113,7 +115,7 @@ impl Cask {
         let tombstone = Entry::new_empty(key);
         let key = key.as_bytes().into();
 
-        if let Some(_) = self.keydir.remove(key) {
+        if let Some(_) = self.keydir.lock().unwrap().remove(key) {
             let _entry = self.fs.write_entry(tombstone)?;
         }
         Ok(())
