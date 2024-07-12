@@ -1,8 +1,6 @@
-mod cask;
-
 use tracing::Level;
 
-use crate::cask::Cask;
+use bitcask::Cask;
 
 fn main() {
     tracing_subscriber::fmt()

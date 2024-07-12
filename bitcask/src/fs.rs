@@ -14,7 +14,7 @@ pub struct Offset(pub usize);
 
 /// Provides a convenient way to interface with the file system
 #[derive(Debug)]
-pub(in crate::cask) struct Fs {
+pub(crate) struct Fs {
     active: File,
     cursor: usize,
 }

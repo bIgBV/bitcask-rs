@@ -1,0 +1,9 @@
+[package]
+name = "bitcask"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = { version = "1.16.1", features = ["derive"] }
+thiserror = "1.0.61"
+tracing = "0.1.40"

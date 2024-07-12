@@ -103,23 +103,24 @@ impl Cask {
         Ok(value.into())
     }
 
+    /// Delete an entry from the data store
     pub fn remove<K>(&mut self, key: &K) -> Result<(), CaskError>
     where
         K: StoredData + Hash + Eq,
     {
-        let tombstone = Entry::new_empty(key);
-        let entry = self.fs.write_entry(tombstone)?;
-
         // TODO: Can we get away from allocating a whole vec for every key?
         // IMO no? We need to own the data for the type in this container.
+        let tombstone = Entry::new_empty(key);
         let key = key.as_bytes().into();
 
-        self.keydir.remove(key);
+        if let Some(_) = self.keydir.remove(key) {
+            let _entry = self.fs.write_entry(tombstone)?;
+        }
         Ok(())
     }
 }
 
-pub(in crate::cask) struct EntryIter<'cask> {
+pub(crate) struct EntryIter<'cask> {
     fs: &'cask Fs,
     current: Offset,
 }

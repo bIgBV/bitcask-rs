@@ -11,7 +11,7 @@ use bytemuck::{bytes_of, Pod, Zeroable};
 /// stored in a cache senstivie manner.
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C, packed)]
-pub(in crate::cask) struct Header {
+pub(crate) struct Header {
     // todo: we're using unix timestamps, so we should be able to pack tombstone information into
     // the higher order bits of a u64
     pub tombstone: u8,
@@ -61,7 +61,7 @@ impl StoredData for &str {
 /// Represents an entry in a data file.
 #[derive(Debug)]
 pub struct Entry<'input> {
-    pub(in crate::cask) header: Header,
+    pub(crate) header: Header,
     key: &'input [u8],
     value: Option<&'input [u8]>,
 }

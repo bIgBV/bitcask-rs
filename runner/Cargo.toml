@@ -1,0 +1,9 @@
+[package]
+name = "runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing-subscriber = "0.3.18"
+tracing = "0.1.40"
+bitcask = {path = "../bitcask/"}
