@@ -95,7 +95,9 @@ where
         let metadata = inner.active.metadata(self.active_fd)?;
         Ok(metadata.len())
     }
+}
 
+impl<T> Fs<T> {
     pub fn update_cursor(&self, loc: u64) {
         let mut inner = self.inner.write().expect("Unable to obtain write lock");
         inner.cursor = loc;
@@ -113,27 +115,33 @@ pub enum FsError {
 /// This allows FileSystems to have multiple working files, without prescribing how the files or
 /// their references are stored.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct Fd(usize);
+pub struct Fd(usize);
 
 /// Basic file system operations used by the FS layer.
 ///
 /// Trait implementations do not need to be threadsafe.
-trait FileSystem {
+pub trait FileSystem {
     fn write_at(&self, file: Fd, buf: &[u8], offset: u64) -> io::Result<usize>;
     fn read_exact_at(&self, file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()>;
     fn metadata(&self, file: Fd) -> io::Result<Metadata>;
     fn flush(&mut self, file: Fd) -> io::Result<()>;
     fn active(&self) -> Fd;
+
+    /// Creates a new instace of this FileSystemImpl
+    fn create_write(path: impl AsRef<Path>) -> Result<Self, FsError>
+    where
+        Self: Sized;
 }
 
-struct SysFileSystem {
+pub struct SysFileSystem {
     active: Fd,
     active_file: File,
 }
 
 impl SysFileSystem {
     fn new(path: impl AsRef<Path>) -> Result<Self, FsError> {
-        let file = OpenOptions::new().write(true).open(&path)?;
+        let path = path.as_ref().join("active.db");
+        let file = OpenOptions::new().write(true).open(path)?;
         Ok(SysFileSystem {
             active: Fd(0),
             active_file: file,
@@ -142,6 +150,10 @@ impl SysFileSystem {
 }
 
 impl FileSystem for SysFileSystem {
+    fn create_write(path: impl AsRef<Path>) -> Result<Self, FsError> {
+        SysFileSystem::new(path)
+    }
+
     fn write_at(&self, _file: Fd, buf: &[u8], offset: u64) -> io::Result<usize> {
         self.active_file.write_at(buf, offset)
     }

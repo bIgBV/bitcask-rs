@@ -1,13 +1,13 @@
 use tracing::Level;
 
-use bitcask::Cask;
+use bitcask::{Cask, SysFileSystem};
 
 fn main() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
 
-    let cask = Cask::new("./").unwrap();
+    let cask: Cask<SysFileSystem> = Cask::new("./").unwrap();
 
     for i in 0..10 {
         let key = format!("hello{i}");

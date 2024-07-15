@@ -2,10 +2,12 @@ mod fs;
 mod repr;
 mod test;
 
+pub use fs::SysFileSystem;
+
 use std::{collections::HashMap, hash::Hash, sync::RwLock};
 
 use bytemuck::PodCastError;
-use fs::{Fs, FsError, Offset};
+use fs::{FileSystem, Fs, FsError, Offset};
 use repr::{Entry, EntryError, Header, StoredData};
 use tracing::{debug, info, instrument};
 
@@ -23,16 +25,20 @@ impl CacheEntry {
     }
 }
 
-pub struct Cask {
-    fs: Fs,
+pub struct Cask<T> {
+    fs: Fs<T>,
     // This can be a RwLock
     keydir: RwLock<HashMap<Vec<u8>, CacheEntry>>,
 }
 
-impl Cask {
+impl<T> Cask<T>
+where
+    T: FileSystem,
+{
     #[instrument]
     pub fn new(path: &str) -> Result<Self, CaskError> {
-        let fs = Fs::new(path)?;
+        let fs_impl = T::create_write(path)?;
+        let fs = Fs::new(fs_impl)?;
 
         let size = fs.active_size()?;
         // We already have an active db. Build KeyDir
@@ -126,12 +132,15 @@ impl Cask {
     }
 }
 
-pub(crate) struct EntryIter<'cask> {
-    fs: &'cask Fs,
+pub(crate) struct EntryIter<'cask, T> {
+    fs: &'cask Fs<T>,
     current: Offset,
 }
 
-impl<'cask> Iterator for EntryIter<'cask> {
+impl<'cask, T> Iterator for EntryIter<'cask, T>
+where
+    T: FileSystem,
+{
     type Item = Result<(Vec<u8>, CacheEntry), CaskError>;
 
     #[instrument(skip(self))]
