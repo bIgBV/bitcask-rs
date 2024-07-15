@@ -92,8 +92,7 @@ where
 
     pub fn active_size(&self) -> Result<u64, FsError> {
         let inner = self.inner.read().expect("Unable to lock active file");
-        let metadata = inner.active.metadata(self.active_fd)?;
-        Ok(metadata.len())
+        Ok(inner.active.file_size(self.active_fd)?)
     }
 }
 
@@ -117,13 +116,19 @@ pub enum FsError {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Fd(usize);
 
+impl Fd {
+    pub fn new_empty() -> Self {
+        Fd(0)
+    }
+}
+
 /// Basic file system operations used by the FS layer.
 ///
 /// Trait implementations do not need to be threadsafe.
 pub trait FileSystem {
     fn write_at(&self, file: Fd, buf: &[u8], offset: u64) -> io::Result<usize>;
     fn read_exact_at(&self, file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()>;
-    fn metadata(&self, file: Fd) -> io::Result<Metadata>;
+    fn file_size(&self, file: Fd) -> io::Result<u64>;
     fn flush(&mut self, file: Fd) -> io::Result<()>;
     fn active(&self) -> Fd;
 
@@ -167,9 +172,9 @@ impl FileSystem for SysFileSystem {
     }
 
     #[instrument(skip(self))]
-    fn metadata(&self, _file: Fd) -> io::Result<Metadata> {
+    fn file_size(&self, _file: Fd) -> io::Result<u64> {
         trace!("Reading metadata for active file");
-        self.active_file.metadata()
+        Ok(self.active_file.metadata()?.len())
     }
 
     #[instrument(skip(self))]
