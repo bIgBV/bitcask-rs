@@ -6,7 +6,7 @@ use std::{
     sync::RwLock,
 };
 
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, trace};
 
 use super::{repr::Entry, CacheEntry};
 
@@ -141,7 +141,7 @@ pub struct SysFileSystem {
 impl SysFileSystem {
     fn new(path: impl AsRef<Path>) -> Result<Self, FsError> {
         let path = path.as_ref().join("active.db");
-        let file = OpenOptions::new().write(true).open(path)?;
+        let file = OpenOptions::new().read(true).write(true).open(dbg!(path))?;
         Ok(SysFileSystem {
             active: Fd(0),
             active_file: file,
@@ -154,19 +154,27 @@ impl FileSystem for SysFileSystem {
         SysFileSystem::new(path)
     }
 
+    #[instrument(skip(self, buf))]
     fn write_at(&self, _file: Fd, buf: &[u8], offset: u64) -> io::Result<usize> {
+        trace!(active_file = ?self.active_file, write_size = buf.len(), "Writing buf into active file");
         self.active_file.write_at(buf, offset)
     }
 
+    #[instrument(skip(self, buf))]
     fn read_exact_at(&self, _file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        trace!(active_file = ?self.active_file, read_size = buf.len(), "Reading into buf from active file");
         self.active_file.read_exact_at(buf, offset)
     }
 
+    #[instrument(skip(self))]
     fn metadata(&self, _file: Fd) -> io::Result<Metadata> {
+        trace!("Reading metadata for active file");
         self.active_file.metadata()
     }
 
+    #[instrument(skip(self))]
     fn flush(&mut self, _file: Fd) -> io::Result<()> {
+        trace!("Flushing to disk");
         self.active_file.flush()
     }
 
