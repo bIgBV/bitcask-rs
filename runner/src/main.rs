@@ -20,4 +20,7 @@ fn main() {
         let val = String::from_utf8(result).unwrap();
         println!("{val}");
     }
+
+    cask.remove(&format!("hello3")).unwrap();
+    assert!(cask.get(&format!("hello3")).is_err());
 }

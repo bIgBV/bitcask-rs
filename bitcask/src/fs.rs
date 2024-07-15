@@ -1,11 +1,12 @@
 use std::{
-    fs::{File, OpenOptions},
-    io,
+    fs::{File, Metadata, OpenOptions},
+    io::{self, Write},
     os::unix::fs::FileExt,
+    path::Path,
     sync::RwLock,
 };
 
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 
 use super::{repr::Entry, CacheEntry};
 
@@ -15,30 +16,29 @@ pub struct Offset(pub usize);
 
 /// Provides a convenient way to interface with the file system
 #[derive(Debug)]
-pub(crate) struct Fs {
-    inner: RwLock<FsInner>,
+pub(crate) struct Fs<T> {
+    inner: RwLock<FsInner<T>>,
+    active_fd: Fd,
 }
 
 #[derive(Debug)]
-struct FsInner {
-    active: File,
+struct FsInner<T> {
+    active: T,
     cursor: u64,
 }
 
-impl Fs {
-    pub fn new(path: &str) -> Result<Self, FsError> {
-        let path = format!("{path}/active.db");
-        let active_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .read(true)
-            .open(&path)?;
-
+impl<T> Fs<T>
+where
+    T: FileSystem,
+{
+    pub fn new(fs: T) -> Result<Self, FsError> {
+        let active = fs.active();
         Ok(Fs {
             inner: RwLock::new(FsInner {
-                active: active_file,
+                active: fs,
                 cursor: 0,
             }),
+            active_fd: active,
         })
     }
 
@@ -55,9 +55,14 @@ impl Fs {
         // Get write lock on inner struct to linearize writes to the WAL in the active db file.
         let mut inner = self.inner.write().expect("Unable to lock active file");
 
+        debug!(pos = inner.cursor);
+
         while size < buf.len() {
-            size += inner.active.write_at(&buf, inner.cursor)?;
+            size += inner.active.write_at(self.active_fd, &buf, inner.cursor)?;
         }
+
+        // Flush to ensure write is persisted
+        inner.active.flush(self.active_fd)?;
 
         let current = Offset(inner.cursor as usize);
         // Update our cursor into the active file
@@ -78,15 +83,22 @@ impl Fs {
             .read()
             .expect("Unable to obtain read lock on active file");
 
-        inner.active.read_exact_at(buf, offset.0 as u64)?;
+        inner
+            .active
+            .read_exact_at(self.active_fd, buf, offset.0 as u64)?;
 
         Ok(())
     }
 
     pub fn active_size(&self) -> Result<u64, FsError> {
         let inner = self.inner.read().expect("Unable to lock active file");
-        let metadata = inner.active.metadata()?;
+        let metadata = inner.active.metadata(self.active_fd)?;
         Ok(metadata.len())
+    }
+
+    pub fn update_cursor(&self, loc: u64) {
+        let mut inner = self.inner.write().expect("Unable to obtain write lock");
+        inner.cursor = loc;
     }
 }
 
@@ -94,4 +106,59 @@ impl Fs {
 pub enum FsError {
     #[error("IoError: {0}")]
     Io(#[from] io::Error),
+}
+
+/// Represents a file descriptor
+///
+/// This allows FileSystems to have multiple working files, without prescribing how the files or
+/// their references are stored.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct Fd(usize);
+
+/// Basic file system operations used by the FS layer.
+///
+/// Trait implementations do not need to be threadsafe.
+trait FileSystem {
+    fn write_at(&self, file: Fd, buf: &[u8], offset: u64) -> io::Result<usize>;
+    fn read_exact_at(&self, file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()>;
+    fn metadata(&self, file: Fd) -> io::Result<Metadata>;
+    fn flush(&mut self, file: Fd) -> io::Result<()>;
+    fn active(&self) -> Fd;
+}
+
+struct SysFileSystem {
+    active: Fd,
+    active_file: File,
+}
+
+impl SysFileSystem {
+    fn new(path: impl AsRef<Path>) -> Result<Self, FsError> {
+        let file = OpenOptions::new().write(true).open(&path)?;
+        Ok(SysFileSystem {
+            active: Fd(0),
+            active_file: file,
+        })
+    }
+}
+
+impl FileSystem for SysFileSystem {
+    fn write_at(&self, _file: Fd, buf: &[u8], offset: u64) -> io::Result<usize> {
+        self.active_file.write_at(buf, offset)
+    }
+
+    fn read_exact_at(&self, _file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        self.active_file.read_exact_at(buf, offset)
+    }
+
+    fn metadata(&self, _file: Fd) -> io::Result<Metadata> {
+        self.active_file.metadata()
+    }
+
+    fn flush(&mut self, _file: Fd) -> io::Result<()> {
+        self.active_file.flush()
+    }
+
+    fn active(&self) -> Fd {
+        self.active
+    }
 }

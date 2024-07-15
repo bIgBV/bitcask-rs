@@ -95,7 +95,7 @@ impl<'input> Entry<'input> {
 
         Ok(Entry {
             header,
-            key: key,
+            key,
             value: Some(val),
         })
     }

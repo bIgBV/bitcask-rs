@@ -1,7 +1,8 @@
 mod fs;
 mod repr;
+mod test;
 
-use std::{collections::HashMap, hash::Hash, sync::Mutex};
+use std::{collections::HashMap, hash::Hash, sync::RwLock};
 
 use bytemuck::PodCastError;
 use fs::{Fs, FsError, Offset};
@@ -25,7 +26,7 @@ impl CacheEntry {
 pub struct Cask {
     fs: Fs,
     // This can be a RwLock
-    keydir: Mutex<HashMap<Vec<u8>, CacheEntry>>,
+    keydir: RwLock<HashMap<Vec<u8>, CacheEntry>>,
 }
 
 impl Cask {
@@ -49,6 +50,8 @@ impl Cask {
                 map.insert(key, cache_entry);
             }
 
+            // Update FS cursor to the end of the file
+            fs.update_cursor(fs.active_size()?);
             map
         } else {
             HashMap::new()
@@ -56,7 +59,7 @@ impl Cask {
 
         Ok(Cask {
             fs,
-            keydir: Mutex::new(keydir),
+            keydir: RwLock::new(keydir),
         })
     }
 
@@ -74,7 +77,7 @@ impl Cask {
         let key = key.as_bytes().into();
 
         self.keydir
-            .lock()
+            .write()
             .expect("Unable to lock hashmap mutex")
             .entry(key)
             .and_modify(|cache_entry| *cache_entry = entry.clone())
@@ -88,7 +91,7 @@ impl Cask {
     where
         K: StoredData + Hash + Eq,
     {
-        let entry = self.keydir.lock().unwrap();
+        let entry = self.keydir.read().unwrap();
         let Some(cache_entry) = entry.get(key.as_bytes()) else {
             return Err(CaskError::NotFound);
         };
@@ -107,7 +110,7 @@ impl Cask {
     }
 
     /// Delete an entry from the data store
-    pub fn remove<K>(&mut self, key: &K) -> Result<(), CaskError>
+    pub fn remove<K>(&self, key: &K) -> Result<(), CaskError>
     where
         K: StoredData + Hash + Eq,
     {
@@ -116,7 +119,7 @@ impl Cask {
         let tombstone = Entry::new_empty(key);
         let key = key.as_bytes().into();
 
-        if let Some(_) = self.keydir.lock().unwrap().remove(key) {
+        if let Some(_) = self.keydir.write().unwrap().remove(key) {
             let _entry = self.fs.write_entry(tombstone)?;
         }
         Ok(())
