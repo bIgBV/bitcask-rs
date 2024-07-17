@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, OpenOptions},
     io::{self, Write},
     os::unix::fs::FileExt,
     path::Path,
@@ -146,7 +146,11 @@ pub struct SysFileSystem {
 impl SysFileSystem {
     fn new(path: impl AsRef<Path>) -> Result<Self, FsError> {
         let path = path.as_ref().join("active.db");
-        let file = OpenOptions::new().read(true).write(true).open(dbg!(path))?;
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(dbg!(path))?;
         Ok(SysFileSystem {
             active: Fd(0),
             active_file: file,

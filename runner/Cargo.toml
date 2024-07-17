@@ -7,3 +7,4 @@ edition = "2021"
 tracing-subscriber = "0.3.18"
 tracing = "0.1.40"
 bitcask = {path = "../bitcask/"}
+argh = "0.1.12"
