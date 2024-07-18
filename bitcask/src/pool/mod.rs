@@ -6,7 +6,10 @@ use std::{
     io, mem,
     sync::{Arc, Condvar, Mutex},
     thread::{self, JoinHandle},
+    time::Duration,
 };
+
+use tracing::{debug, info, instrument};
 
 type BoxFn<'a> = Box<dyn FnOnce() + Send + 'a>;
 
@@ -32,6 +35,9 @@ struct Inner {
 
     /// The condvar against which idle workers wait
     condvar: Condvar,
+
+    /// Maximum number of threads in this thread pool
+    max_threads: usize,
 }
 
 /// Shared data across all worker threads
@@ -55,7 +61,7 @@ struct Shared {
     shutdown: bool,
 
     // todo: replace with oneshot channel
-    shutdown_tx: channel::Sender,
+    shutdown_tx: Option<channel::Sender>,
 }
 
 pub struct PoolHandle {
@@ -76,14 +82,16 @@ impl Pool {
                     worker_threads: HashMap::new(),
                     waiting_threads: 0,
                     shutdown: false,
-                    shutdown_tx: send,
+                    shutdown_tx: Some(send),
                 }),
                 condvar: Condvar::new(),
+                max_threads: 4,
             }),
             shutdown_rx: Arc::new(recv),
         }
     }
 
+    #[instrument(skip(self, func))]
     pub fn execute<F>(&self, func: F)
     where
         F: FnOnce() + Send + 'static,
@@ -91,29 +99,45 @@ impl Pool {
         let mut shared = self.inner.shared.lock().unwrap();
         shared.queue.push_back(Box::new(func));
 
-        if shared.num_threads == 0 {
-            let current_idx = shared.thread_idx;
-            let shutdown_tx = shared.shutdown_tx.clone();
+        if shared.num_threads == 0 || shared.waiting_threads == 0 {
+            info!(
+                num_threads = shared.num_threads,
+                waiting_threads = shared.waiting_threads,
+                "No thread available to take work"
+            );
 
-            match self.spawn_thread(current_idx, shutdown_tx) {
-                Ok(handle) => {
-                    shared.thread_idx += 1;
-                    shared.worker_threads.insert(current_idx, handle);
-                }
-                Err(e) => {
-                    panic!("Error spawning thread in threadpool: {}", e);
+            if shared.num_threads == self.inner.max_threads {
+                info!("We hit max thread cap");
+            } else {
+                info!("Spawning new thread to handle task");
+                let current_idx = shared.thread_idx;
+                if let Some(shutdown_tx) = shared.shutdown_tx.clone() {
+                    match self.spawn_thread(current_idx, shutdown_tx) {
+                        Ok(handle) => {
+                            shared.num_threads += 1;
+                            shared.thread_idx += 1;
+                            shared.worker_threads.insert(current_idx, handle);
+                        }
+                        Err(e) => {
+                            panic!("Error spawning thread in threadpool: {}", e);
+                        }
+                    }
                 }
             }
         } else {
+            info!("notifying idle threads");
             shared.waiting_threads += 1;
             self.inner.condvar.notify_one();
         }
     }
 
+    #[instrument(skip(self), fields(thread=?thread::current().id()))]
     pub fn shutdown(&self) {
+        info!("Shutting down pool");
         let mut shared = self.inner.shared.lock().unwrap();
 
         if shared.shutdown {
+            debug!("Another thread already set shutdown state");
             // Someone's already set the flag either through this function or in the drop method.
             // Exist early to prevent shutting down twice.
             return;
@@ -121,19 +145,30 @@ impl Pool {
 
         // First thread that enters this critical section is responsible for ensuring all current
         // threads exit.
+        shared.shutdown = true;
+
+        // Setting this to None triggers the `Drop` of the inner sender, as the threads are getting
+        // a clone. If we don't set this, we will always end up blocking on the `recv`.
+        shared.shutdown_tx = None;
+        self.inner.condvar.notify_all();
         let workers = mem::take(&mut shared.worker_threads);
         // drop the lock to allow other threads to enther shutdown
         drop(shared);
 
+        // Wake up any idle threads to let them know that we're shutting down.
         // When all existing threads have finished their run loops, we drop the send half, which
         // results in an err
         if let Err(_) = self.shutdown_rx.recv.recv() {
+            debug!("All threads have exited core loop");
             for (_id, worker) in workers {
                 let _ = worker.join();
             }
         }
+
+        info!("Finished shutting down pool");
     }
 
+    #[instrument(skip(self, shutdown_tx))]
     fn spawn_thread(
         &self,
         id: usize,
@@ -145,6 +180,7 @@ impl Pool {
         builder.spawn(move || {
             handle.inner.run(id);
 
+            info!(thread = id, "Finished inner loop");
             // Drop the send half of the channel to signal that we're out of the core loop
             drop(shutdown_tx);
         })
@@ -152,12 +188,14 @@ impl Pool {
 }
 
 impl Drop for Pool {
+    #[instrument(skip(self))]
     fn drop(&mut self) {
         self.shutdown();
     }
 }
 
 impl Inner {
+    #[instrument(skip(self))]
     fn run(&self, thread_id: usize) {
         let mut shared = self.shared.lock().unwrap();
 
@@ -166,6 +204,7 @@ impl Inner {
             // Busy state
             // Grab the first available job in the queue
             while let Some(job) = shared.queue.pop_front() {
+                debug!("Popped job from queue");
                 // drop the mutex guard as we've obtained a job from the queue
                 drop(shared);
                 // todo: Use a channel to send result
@@ -176,11 +215,13 @@ impl Inner {
 
             // Idle
             while !shared.shutdown {
+                debug!("No more jobs, going to sleep");
                 // Wait until we get notified of a new job on the queue
                 // todo: Use wait_timeout here?
                 shared = self.condvar.wait(shared).unwrap();
 
                 if shared.waiting_threads != 0 {
+                    debug!("new job added to queue. Transition to Busy");
                     // We have more jobs to pick up. Decrement number of waiting threads and break
                     // into the busy part of the loop
                     shared.waiting_threads -= 1;
@@ -192,6 +233,8 @@ impl Inner {
 
             // Shutdown
             if shared.shutdown {
+                debug!("Shutting down thread");
+                // There are no jobs left _and_ we are shutting down
                 // Draining existing jobs from the queue without running them
                 while let Some(_job) = shared.queue.pop_front() {
                     shared = self.shared.lock().unwrap();
@@ -207,24 +250,36 @@ impl Inner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use tracing::{info, Level};
 
     use super::Pool;
 
+    fn init_tracing() {
+        tracing_subscriber::fmt()
+            .with_max_level(Level::TRACE)
+            .init();
+    }
+
     #[test]
     fn simple_execution() {
+        init_tracing();
+
+        let n_jobs = 5;
         let pool = Pool::new();
         let (send, recv) = mpsc::channel();
 
-        for _ in 0..5 {
+        for i in 0..n_jobs {
             let send = send.clone();
             pool.execute(move || {
-                println!("Starting work");
+                thread::sleep(Duration::from_millis(1000));
+                info!(thread = i, "Doing work");
                 let _ = send.send(5);
             });
         }
 
-        println!("Waiting for work");
-        assert_eq!(recv.iter().take(5).fold(0, |acc, i| acc + i), 25);
+        info!("Waiting for work");
+        assert_eq!(recv.iter().take(n_jobs).fold(0, |acc, i| acc + i), 25);
     }
 }
