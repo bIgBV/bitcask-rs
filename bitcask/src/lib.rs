@@ -1,4 +1,5 @@
 mod fs;
+mod pool;
 mod repr;
 mod test;
 
@@ -7,8 +8,8 @@ pub use fs::SysFileSystem;
 use std::{collections::HashMap, hash::Hash, sync::RwLock};
 
 use bytemuck::PodCastError;
-use fs::{FileSystem, Fs, FsError, Offset};
-use repr::{Entry, EntryError, Header, StoredData};
+use fs::{Fd, FileSystem, Fs, FsError, Offset};
+use repr::{Entry, EntryError, Header, OwnedEntry, StoredData};
 use tracing::{debug, info, instrument};
 
 // todo add file ids
@@ -44,7 +45,7 @@ where
         // We already have an active db. Build KeyDir
         let keydir = if size > 0 {
             info!(file_size = size, "Active db exists");
-            let iterator = EntryIter {
+            let iterator = HeaderIter {
                 fs: &fs,
                 current: Offset(0),
             };
@@ -130,14 +131,40 @@ where
         }
         Ok(())
     }
+
+    pub(crate) fn entry_iter(&self, fd: Fd) -> EntryIter<'_, T> {
+        EntryIter {
+            fs: &self.fs,
+            current: Offset(0),
+            fd,
+        }
+    }
 }
 
 pub(crate) struct EntryIter<'cask, T> {
     fs: &'cask Fs<T>,
     current: Offset,
+    fd: Fd,
 }
 
 impl<'cask, T> Iterator for EntryIter<'cask, T>
+where
+    T: FileSystem,
+{
+    type Item = Result<OwnedEntry, CaskError>;
+
+    #[instrument(skip(self))]
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
+
+pub(crate) struct HeaderIter<'cask, T> {
+    fs: &'cask Fs<T>,
+    current: Offset,
+}
+
+impl<'cask, T> Iterator for HeaderIter<'cask, T>
 where
     T: FileSystem,
 {

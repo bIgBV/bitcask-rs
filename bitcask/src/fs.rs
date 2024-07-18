@@ -23,7 +23,7 @@ pub(crate) struct Fs<T> {
 
 #[derive(Debug)]
 struct FsInner<T> {
-    active: T,
+    fs_impl: T,
     cursor: u64,
 }
 
@@ -35,7 +35,7 @@ where
         let active = fs.active();
         Ok(Fs {
             inner: RwLock::new(FsInner {
-                active: fs,
+                fs_impl: fs,
                 cursor: 0,
             }),
             active_fd: active,
@@ -58,11 +58,11 @@ where
         debug!(pos = inner.cursor);
 
         while size < buf.len() {
-            size += inner.active.write_at(self.active_fd, &buf, inner.cursor)?;
+            size += inner.fs_impl.write_at(self.active_fd, &buf, inner.cursor)?;
         }
 
         // Flush to ensure write is persisted
-        inner.active.flush(self.active_fd)?;
+        inner.fs_impl.flush(self.active_fd)?;
 
         let current = Offset(inner.cursor as usize);
         // Update our cursor into the active file
@@ -84,15 +84,35 @@ where
             .expect("Unable to obtain read lock on active file");
 
         inner
-            .active
+            .fs_impl
             .read_exact_at(self.active_fd, buf, offset.0 as u64)?;
+
+        Ok(())
+    }
+
+    /// Get a chunk of buf.len() from file associated with given Fd
+    #[instrument(skip(self, buf))]
+    pub fn get_chunk_fd(&self, offset: Offset, buf: &mut [u8], fd: Fd) -> Result<(), FsError> {
+        info!(fd = ?fd, "reading chunk from immutable file");
+
+        let inner = self
+            .inner
+            .read()
+            .expect("Unable to obtain read lock on active file");
+
+        inner.fs_impl.read_exact_at(fd, buf, offset.0 as u64)?;
 
         Ok(())
     }
 
     pub fn active_size(&self) -> Result<u64, FsError> {
         let inner = self.inner.read().expect("Unable to lock active file");
-        Ok(inner.active.file_size(self.active_fd)?)
+        Ok(inner.fs_impl.file_size(self.active_fd)?)
+    }
+
+    pub fn active_fd(&self) -> Fd {
+        let inner = self.inner.read().expect("Unable to lock active file");
+        inner.fs_impl.active()
     }
 }
 
