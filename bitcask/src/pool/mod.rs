@@ -4,10 +4,7 @@ use core::panic;
 use std::{
     collections::{HashMap, VecDeque},
     io, mem,
-    sync::{
-        mpsc::{self, RecvError},
-        Arc, Condvar, Mutex,
-    },
+    sync::{Arc, Condvar, Mutex},
     thread::{self, JoinHandle},
 };
 
@@ -17,13 +14,16 @@ type BoxFn<'a> = Box<dyn FnOnce() + Send + 'a>;
 pub struct Job {}
 
 struct Pool {
-    inner: Inner,
-    shutdown_rx: channel::Receiver,
+    inner: Arc<Inner>,
+    shutdown_rx: Arc<channel::Receiver>,
 }
 
 impl Clone for Pool {
     fn clone(&self) -> Self {
-        todo!()
+        Pool {
+            inner: self.inner.clone(),
+            shutdown_rx: self.shutdown_rx.clone(),
+        }
     }
 }
 
@@ -68,7 +68,7 @@ impl Pool {
     pub fn new() -> Self {
         let (send, recv) = channel::channel();
         Self {
-            inner: Inner {
+            inner: Arc::new(Inner {
                 shared: Mutex::new(Shared {
                     queue: VecDeque::new(),
                     num_threads: 0,
@@ -79,8 +79,8 @@ impl Pool {
                     shutdown_tx: send,
                 }),
                 condvar: Condvar::new(),
-            },
-            shutdown_rx: recv,
+            }),
+            shutdown_rx: Arc::new(recv),
         }
     }
 
@@ -95,7 +95,7 @@ impl Pool {
             let current_idx = shared.thread_idx;
             let shutdown_tx = shared.shutdown_tx.clone();
 
-            match self.spawn_thread(&self, current_idx, shutdown_tx) {
+            match self.spawn_thread(current_idx, shutdown_tx) {
                 Ok(handle) => {
                     shared.thread_idx += 1;
                     shared.worker_threads.insert(current_idx, handle);
@@ -136,12 +136,11 @@ impl Pool {
 
     fn spawn_thread(
         &self,
-        handle: &Pool,
         id: usize,
         shutdown_tx: channel::Sender,
     ) -> io::Result<thread::JoinHandle<()>> {
         let builder = thread::Builder::new();
-        let handle = handle.clone();
+        let handle = self.clone();
 
         builder.spawn(move || {
             handle.inner.run(id);
@@ -201,5 +200,31 @@ impl Inner {
                 break;
             }
         }
+
+        // Thread exit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::Pool;
+
+    #[test]
+    fn simple_execution() {
+        let pool = Pool::new();
+        let (send, recv) = mpsc::channel();
+
+        for _ in 0..5 {
+            let send = send.clone();
+            pool.execute(move || {
+                println!("Starting work");
+                let _ = send.send(5);
+            });
+        }
+
+        println!("Waiting for work");
+        assert_eq!(recv.iter().take(5).fold(0, |acc, i| acc + i), 25);
     }
 }

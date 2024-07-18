@@ -1,29 +1,16 @@
-use std::sync::{mpsc, Arc};
+use crossbeam_channel::unbounded;
 
 #[derive(Debug, Clone)]
 pub(super) struct Sender {
-    send: Arc<mpsc::Sender<()>>,
+    send: crossbeam_channel::Sender<()>,
 }
 
-impl Sender {
-    fn new(send: mpsc::Sender<()>) -> Self {
-        Self {
-            send: Arc::new(send),
-        }
-    }
-}
-
+#[derive(Debug, Clone)]
 pub(super) struct Receiver {
-    pub recv: mpsc::Receiver<()>,
-}
-
-impl Receiver {
-    fn new(recv: mpsc::Receiver<()>) -> Self {
-        Self { recv }
-    }
+    pub recv: crossbeam_channel::Receiver<()>,
 }
 
 pub(super) fn channel() -> (Sender, Receiver) {
-    let (send, recv) = mpsc::channel();
-    (Sender::new(send), Receiver::new(recv))
+    let (send, recv) = unbounded();
+    (Sender { send }, Receiver { recv })
 }
