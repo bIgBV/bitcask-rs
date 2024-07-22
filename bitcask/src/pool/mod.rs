@@ -71,7 +71,7 @@ struct Shared {
 }
 
 impl Pool {
-    pub fn new() -> Self {
+    pub fn new(max_threads: usize) -> Self {
         let (send, recv) = channel::channel();
         Self {
             inner: Arc::new(Inner {
@@ -85,7 +85,7 @@ impl Pool {
                     shutdown_tx: Some(send),
                 }),
                 condvar: Condvar::new(),
-                max_threads: 4,
+                max_threads,
                 num_handles: AtomicUsize::new(1),
             }),
             shutdown_rx: Arc::new(recv),
@@ -285,7 +285,7 @@ mod tests {
         init_tracing();
 
         let n_jobs = 8;
-        let pool = Pool::new();
+        let pool = Pool::new(1);
         let (send, recv) = mpsc::channel();
 
         for i in 0..n_jobs {
@@ -306,7 +306,7 @@ mod tests {
         init_tracing();
 
         let n_jobs = 10;
-        let pool = Pool::new();
+        let pool = Pool::new(4);
         let (send, recv) = unbounded();
 
         let send_copy = send.clone();
