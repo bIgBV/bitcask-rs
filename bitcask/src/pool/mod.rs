@@ -4,17 +4,16 @@ use core::panic;
 use std::{
     collections::{HashMap, VecDeque},
     io, mem,
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread::{self, JoinHandle},
-    time::Duration,
 };
 
 use tracing::{debug, info, instrument};
 
 type BoxFn<'a> = Box<dyn FnOnce() + Send + 'a>;
-
-#[derive(Debug)]
-pub struct Job {}
 
 struct Pool {
     inner: Arc<Inner>,
@@ -23,8 +22,12 @@ struct Pool {
 
 impl Clone for Pool {
     fn clone(&self) -> Self {
+        // Increment refcount
+        self.inner.num_handles.fetch_add(1, Ordering::AcqRel);
+
+        let inner = self.inner.clone();
         Pool {
-            inner: self.inner.clone(),
+            inner,
             shutdown_rx: self.shutdown_rx.clone(),
         }
     }
@@ -38,6 +41,9 @@ struct Inner {
 
     /// Maximum number of threads in this thread pool
     max_threads: usize,
+
+    /// Tracks number of pool handles that currently exit
+    num_handles: AtomicUsize,
 }
 
 /// Shared data across all worker threads
@@ -64,12 +70,6 @@ struct Shared {
     shutdown_tx: Option<channel::Sender>,
 }
 
-pub struct PoolHandle {
-    handle: Arc<Pool>,
-}
-
-type Queue = Arc<Mutex<VecDeque<Job>>>;
-
 impl Pool {
     pub fn new() -> Self {
         let (send, recv) = channel::channel();
@@ -86,6 +86,7 @@ impl Pool {
                 }),
                 condvar: Condvar::new(),
                 max_threads: 4,
+                num_handles: AtomicUsize::new(1),
             }),
             shutdown_rx: Arc::new(recv),
         }
@@ -133,16 +134,22 @@ impl Pool {
 
     #[instrument(skip(self), fields(thread=?thread::current().id()))]
     pub fn shutdown(&self) {
+        if self.inner.num_handles.load(Ordering::Acquire) != 1 {
+            // There are still handles to the pool out there. Wait until we're the last
+            debug!("More handles exist");
+            return;
+        }
         info!("Shutting down pool");
         let mut shared = self.inner.shared.lock().unwrap();
 
-        if shared.shutdown {
+        if shared.shutdown_tx.is_none() {
             debug!("Another thread already set shutdown state");
             // Someone's already set the flag either through this function or in the drop method.
             // Exist early to prevent shutting down twice.
             return;
         }
 
+        info!("We are responsible for shutting down the pool");
         // First thread that enters this critical section is responsible for ensuring all current
         // threads exit.
         shared.shutdown = true;
@@ -175,10 +182,10 @@ impl Pool {
         shutdown_tx: channel::Sender,
     ) -> io::Result<thread::JoinHandle<()>> {
         let builder = thread::Builder::new();
-        let handle = self.clone();
+        let pool_handle = self.clone();
 
         builder.spawn(move || {
-            handle.inner.run(id);
+            pool_handle.inner.run(id);
 
             info!(thread = id, "Finished inner loop");
             // Drop the send half of the channel to signal that we're out of the core loop
@@ -190,6 +197,7 @@ impl Pool {
 impl Drop for Pool {
     #[instrument(skip(self))]
     fn drop(&mut self) {
+        self.inner.num_handles.fetch_sub(1, Ordering::Release);
         self.shutdown();
     }
 }
@@ -245,28 +253,38 @@ impl Inner {
         }
 
         // Thread exit
+        shared.num_threads -= 1;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{
+        sync::{mpsc, Once},
+        thread,
+        time::Duration,
+    };
 
+    use crossbeam_channel::{self, unbounded};
     use tracing::{info, Level};
 
     use super::Pool;
 
+    static TRACING: Once = Once::new();
+
     fn init_tracing() {
-        tracing_subscriber::fmt()
-            .with_max_level(Level::TRACE)
-            .init();
+        TRACING.call_once(|| {
+            tracing_subscriber::fmt()
+                .with_max_level(Level::TRACE)
+                .init();
+        });
     }
 
     #[test]
     fn simple_execution() {
         init_tracing();
 
-        let n_jobs = 5;
+        let n_jobs = 8;
         let pool = Pool::new();
         let (send, recv) = mpsc::channel();
 
@@ -280,6 +298,39 @@ mod tests {
         }
 
         info!("Waiting for work");
-        assert_eq!(recv.iter().take(n_jobs).fold(0, |acc, i| acc + i), 25);
+        assert_eq!(recv.iter().take(n_jobs).fold(0, |acc, i| acc + i), 40);
+    }
+
+    #[test]
+    fn cloned_execution() {
+        init_tracing();
+
+        let n_jobs = 10;
+        let pool = Pool::new();
+        let (send, recv) = unbounded();
+
+        let send_copy = send.clone();
+        let pool_copy = pool.clone();
+
+        thread::spawn(move || {
+            pool_copy.execute(move || {
+                info!(thread = "new", "Doing work");
+                let _ = send_copy.send(2);
+            });
+        });
+
+        // Delay the next execution until we've had a chance to spawn the thread.
+        thread::sleep(Duration::from_millis(500));
+        for i in 0..n_jobs {
+            let send = send.clone();
+            pool.execute(move || {
+                thread::sleep(Duration::from_millis(1000));
+                info!(thread = i, "Doing work");
+                let _ = send.send(1);
+            });
+        }
+
+        info!("Waiting for work");
+        assert_eq!(recv.iter().take(n_jobs + 1).fold(0, |acc, i| acc + i), 12);
     }
 }
