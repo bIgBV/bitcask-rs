@@ -8,6 +8,8 @@ use std::{
 
 use tracing::{debug, info, instrument, trace};
 
+use crate::{ClockSource, System};
+
 use super::{repr::Entry, CacheEntry};
 
 /// An offset of an entry in a data file
@@ -158,12 +160,12 @@ pub trait FileSystem {
         Self: Sized;
 }
 
-pub struct SysFileSystem {
+pub struct ConcreteSystem {
     active: Fd,
     active_file: File,
 }
 
-impl SysFileSystem {
+impl ConcreteSystem {
     fn new(path: impl AsRef<Path>) -> Result<Self, FsError> {
         let path = path.as_ref().join("active.db");
         let file = OpenOptions::new()
@@ -171,16 +173,16 @@ impl SysFileSystem {
             .read(true)
             .write(true)
             .open(dbg!(path))?;
-        Ok(SysFileSystem {
+        Ok(ConcreteSystem {
             active: Fd(0),
             active_file: file,
         })
     }
 }
 
-impl FileSystem for SysFileSystem {
+impl FileSystem for ConcreteSystem {
     fn create_write(path: impl AsRef<Path>) -> Result<Self, FsError> {
-        SysFileSystem::new(path)
+        ConcreteSystem::new(path)
     }
 
     #[instrument(skip(self, buf))]
@@ -211,3 +213,10 @@ impl FileSystem for SysFileSystem {
         self.active
     }
 }
+
+impl ClockSource for ConcreteSystem {}
+
+impl System for ConcreteSystem {}
+
+unsafe impl Send for ConcreteSystem {}
+unsafe impl Sync for ConcreteSystem {}

@@ -5,7 +5,7 @@ mod repr;
 mod test;
 
 use compactor::Compactor;
-pub use fs::SysFileSystem;
+pub use fs::ConcreteSystem;
 use pool::Pool;
 
 use std::{

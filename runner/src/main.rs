@@ -3,7 +3,7 @@ use std::{sync::Arc, thread};
 use argh::FromArgs;
 use tracing::Level;
 
-use bitcask::{Cask, SysFileSystem};
+use bitcask::{Cask, ConcreteSystem};
 
 #[derive(Debug, FromArgs)]
 /// What it says on the tin: runs simple programs for testing bitcask
@@ -26,7 +26,7 @@ fn main() {
             .init();
     }
 
-    let cask: Cask<SysFileSystem> = Cask::new("./").unwrap();
+    let cask: Cask<ConcreteSystem> = Cask::new("./").unwrap();
     let cask = Arc::new(cask);
 
     let mut handles = Vec::with_capacity(opts.num_threads);

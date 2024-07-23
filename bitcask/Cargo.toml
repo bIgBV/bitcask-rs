@@ -9,5 +9,8 @@ crossbeam-channel = "0.5.13"
 thiserror = "1.0.61"
 tracing = "0.1.40"
 
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
 [dev-dependencies]
 tracing-subscriber = "0.3.18"

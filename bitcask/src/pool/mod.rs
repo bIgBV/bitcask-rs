@@ -1,13 +1,15 @@
 mod channel;
+mod sync;
+
+use crate::pool::sync::{
+    thread::{self, JoinHandle},
+    Arc, AtomicUsize, Condvar, Mutex,
+};
 
 use std::{
     collections::{HashMap, VecDeque},
     io, mem,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Condvar, Mutex,
-    },
-    thread::{self, JoinHandle},
+    sync::atomic::Ordering,
 };
 
 use tracing::{debug, info, instrument};
@@ -300,36 +302,44 @@ mod tests {
         assert_eq!(recv.iter().take(n_jobs).fold(0, |acc, i| acc + i), 40);
     }
 
+    #[cfg(loom)]
     #[test]
-    fn cloned_execution() {
-        init_tracing();
+    fn loom_cloned_execution() {
+        loom::model(|| {
+            let n_jobs = 10;
+            let pool = Pool::new(4);
+            let (send, recv) = loom::sync::mpsc::channel();
 
-        let n_jobs = 10;
-        let pool = Pool::new(4);
-        let (send, recv) = unbounded();
+            let send_copy = send.clone();
+            let pool_copy = pool.clone();
 
-        let send_copy = send.clone();
-        let pool_copy = pool.clone();
-
-        thread::spawn(move || {
-            pool_copy.execute(move || {
-                info!(thread = "new", "Doing work");
-                let _ = send_copy.send(2);
+            thread::spawn(move || {
+                pool_copy.execute(move || {
+                    info!(thread = "new", "Doing work");
+                    let _ = send_copy.send(2);
+                });
             });
+
+            // Delay the next execution until we've had a chance to spawn the thread.
+            thread::sleep(Duration::from_millis(500));
+            for i in 0..n_jobs {
+                let send = send.clone();
+                pool.execute(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    info!(thread = i, "Doing work");
+                    let _ = send.send(1);
+                });
+            }
+
+            drop(send);
+            info!("Waiting for work");
+
+            let mut sum = 0;
+            while let Ok(item) = recv.recv() {
+                sum += item;
+            }
+
+            assert_eq!(sum, 12);
         });
-
-        // Delay the next execution until we've had a chance to spawn the thread.
-        thread::sleep(Duration::from_millis(500));
-        for i in 0..n_jobs {
-            let send = send.clone();
-            pool.execute(move || {
-                thread::sleep(Duration::from_millis(1000));
-                info!(thread = i, "Doing work");
-                let _ = send.send(1);
-            });
-        }
-
-        info!("Waiting for work");
-        assert_eq!(recv.iter().take(n_jobs + 1).fold(0, |acc, i| acc + i), 12);
     }
 }
