@@ -1,11 +1,18 @@
+mod compactor;
 mod fs;
 mod pool;
 mod repr;
 mod test;
 
+use compactor::Compactor;
 pub use fs::SysFileSystem;
+use pool::Pool;
 
-use std::{collections::HashMap, hash::Hash, sync::RwLock};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    sync::{Arc, RwLock},
+};
 
 use bytemuck::PodCastError;
 use fs::{Fd, FileSystem, Fs, FsError, Offset};
@@ -26,15 +33,21 @@ impl CacheEntry {
     }
 }
 
+#[derive(Clone)]
 pub struct Cask<T> {
+    inner: Arc<Inner<T>>,
+}
+
+struct Inner<T> {
     fs: Fs<T>,
     // This can be a RwLock
     keydir: RwLock<HashMap<Vec<u8>, CacheEntry>>,
+    pool: Pool,
 }
 
 impl<T> Cask<T>
 where
-    T: FileSystem,
+    T: System,
 {
     #[instrument]
     pub fn new(path: &str) -> Result<Self, CaskError> {
@@ -65,9 +78,28 @@ where
         };
 
         Ok(Cask {
-            fs,
-            keydir: RwLock::new(keydir),
+            inner: Arc::new(Inner {
+                fs,
+                keydir: RwLock::new(keydir),
+                pool: Pool::new(4),
+            }),
         })
+    }
+
+    pub fn init(self) -> Self {
+        // todo: parameterize
+        for _ in 0..2 {
+            // Create a new Cask instance which is a copy of the innser struct to ensure that the
+            // whole clone is moved into each background thread closure.
+            let new_inner = self.inner.clone();
+            let new_cask = Cask { inner: new_inner };
+
+            self.inner.pool.execute(move || {
+                new_cask.compaction_loop();
+            });
+        }
+
+        self
     }
 
     /// Inserts a new entry into the data store
@@ -77,13 +109,14 @@ where
         V: StoredData,
     {
         let entry = Entry::new_encoded(&key, &value)?;
-        let entry = self.fs.write_entry(entry)?;
+        let entry = self.inner.fs.write_entry(entry)?;
 
-        // TODO: Can we get away from allocating a whole vec for every key?
+        // TODO: Can we get away from allocating a whole new vec for every key?
         // IMO no? We need to own the data for the type in this container.
         let key = key.as_bytes().into();
 
-        self.keydir
+        self.inner
+            .keydir
             .write()
             .expect("Unable to lock hashmap mutex")
             .entry(key)
@@ -98,18 +131,20 @@ where
     where
         K: StoredData + Hash + Eq,
     {
-        let entry = self.keydir.read().unwrap();
+        let entry = self.inner.keydir.read().unwrap();
         let Some(cache_entry) = entry.get(key.as_bytes()) else {
             return Err(CaskError::NotFound);
         };
 
         let mut buf = [0u8; Header::LEN as usize];
-        self.fs.get_chunk(cache_entry.offset, &mut buf)?;
+        self.inner.fs.get_chunk(cache_entry.offset, &mut buf)?;
         let header: &Header = bytemuck::try_from_bytes(&buf).map_err(CaskError::Cast)?;
 
         let data_len = header.data_size();
         let mut buf = vec![0u8; data_len as usize];
-        self.fs.get_chunk(cache_entry.data_offset(), &mut buf)?;
+        self.inner
+            .fs
+            .get_chunk(cache_entry.data_offset(), &mut buf)?;
 
         let value = &buf[header.key_size as usize..];
 
@@ -126,17 +161,33 @@ where
         let tombstone = Entry::new_empty(key);
         let key = key.as_bytes().into();
 
-        if let Some(_) = self.keydir.write().unwrap().remove(key) {
-            let _entry = self.fs.write_entry(tombstone)?;
+        if let Some(_) = self.inner.keydir.write().unwrap().remove(key) {
+            let _entry = self.inner.fs.write_entry(tombstone)?;
         }
         Ok(())
     }
 
     pub(crate) fn entry_iter(&self, fd: Fd) -> EntryIter<'_, T> {
         EntryIter {
-            fs: &self.fs,
+            fs: &self.inner.fs,
             current: Offset(0),
             fd,
+        }
+    }
+}
+
+// Compaction impl
+impl<T> Cask<T>
+where
+    T: System,
+{
+    pub(crate) fn compaction_loop(self: Self) {
+        let mut compactor = Compactor::new();
+
+        loop {
+            while let Some(operation) = compactor.poll_transmit() {
+                println!("Handling operation: {:?}", operation);
+            }
         }
     }
 }
@@ -149,7 +200,7 @@ pub(crate) struct EntryIter<'cask, T> {
 
 impl<'cask, T> Iterator for EntryIter<'cask, T>
 where
-    T: FileSystem,
+    T: System,
 {
     type Item = Result<OwnedEntry, CaskError>;
 
@@ -166,7 +217,7 @@ pub(crate) struct HeaderIter<'cask, T> {
 
 impl<'cask, T> Iterator for HeaderIter<'cask, T>
 where
-    T: FileSystem,
+    T: System,
 {
     type Item = Result<(Vec<u8>, CacheEntry), CaskError>;
 
@@ -213,6 +264,10 @@ where
         None
     }
 }
+
+pub trait System: FileSystem + ClockSource + Send + Sync + 'static {}
+
+pub trait ClockSource {}
 
 #[derive(thiserror::Error, Debug)]
 pub enum CaskError {

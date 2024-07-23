@@ -1,6 +1,5 @@
 mod channel;
 
-use core::panic;
 use std::{
     collections::{HashMap, VecDeque},
     io, mem,
@@ -15,7 +14,7 @@ use tracing::{debug, info, instrument};
 
 type BoxFn<'a> = Box<dyn FnOnce() + Send + 'a>;
 
-struct Pool {
+pub(crate) struct Pool {
     inner: Arc<Inner>,
     shutdown_rx: Arc<channel::Receiver>,
 }
