@@ -269,7 +269,6 @@ mod unit_tests {
         time::Duration,
     };
 
-    use crossbeam_channel::{self, unbounded};
     use tracing::{info, Level};
 
     use super::Pool;

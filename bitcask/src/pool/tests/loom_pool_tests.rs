@@ -26,9 +26,17 @@ fn loom_cloned_execution() {
 
         drop(send);
 
+        let mut num = 0;
         let mut sum = 0;
-        while let Ok(item) = recv.recv() {
-            sum += item;
+        loop {
+            if let Ok(item) = recv.recv() {
+                sum += item;
+            }
+            num += 1;
+
+            if num == n_jobs + 1 {
+                break;
+            }
         }
 
         assert_eq!(sum, 12);
