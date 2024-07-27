@@ -19,7 +19,7 @@ use fs::{Fd, FileSystem, Fs, FsError, Offset};
 use repr::{Entry, EntryError, Header, OwnedEntry, StoredData};
 use tracing::{debug, info, instrument};
 
-use crate::compactor::{Input, Operation};
+const ACTIVE_FILE_THRESHOLD: usize = 4096;
 
 // todo add file ids
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,7 +53,7 @@ where
 {
     #[instrument]
     pub fn new(path: &str) -> Result<Self, CaskError> {
-        let fs_impl = T::create_write(path)?;
+        let fs_impl = T::init(path)?;
         let fs = Fs::new(fs_impl)?;
 
         let size = fs.active_size()?;
@@ -112,6 +112,11 @@ where
     {
         let entry = Entry::new_encoded(&key, &value)?;
         let entry = self.inner.fs.write_entry(entry)?;
+
+        // A branch requring a mutex on every insert could get expensive
+        if self.inner.fs.active_size()? as usize >= ACTIVE_FILE_THRESHOLD {
+            self.inner.fs.swap_active()?;
+        }
 
         // TODO: Can we get away from allocating a whole new vec for every key?
         // IMO no? We need to own the data for the type in this container.

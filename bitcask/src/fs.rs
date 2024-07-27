@@ -1,9 +1,15 @@
+use core::fmt;
 use std::{
-    fs::{File, OpenOptions},
+    collections::HashMap,
+    fs::{self, File, OpenOptions},
+    hash::Hash,
     io::{self, Write},
     os::unix::fs::FileExt,
-    path::Path,
-    sync::RwLock,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        RwLock,
+    },
 };
 
 use tracing::{debug, info, instrument, trace};
@@ -116,6 +122,12 @@ where
         let inner = self.inner.read().expect("Unable to lock active file");
         inner.fs_impl.active()
     }
+
+    pub fn swap_active(&self) -> Result<(), FsError> {
+        let inner = self.inner.write().expect("Unable to lock fs inner ");
+
+        Ok(())
+    }
 }
 
 impl<T> Fs<T> {
@@ -144,6 +156,12 @@ impl Fd {
     }
 }
 
+impl fmt::Display for Fd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Fd({})", self.0)
+    }
+}
+
 /// Basic file system operations used by the FS layer.
 ///
 /// Trait implementations do not need to be threadsafe.
@@ -155,58 +173,125 @@ pub trait FileSystem {
     fn active(&self) -> Fd;
 
     /// Creates a new instace of this FileSystemImpl
-    fn create_write(path: impl AsRef<Path>) -> Result<Self, FsError>
+    fn init(path: impl Into<PathBuf>) -> Result<Self, FsError>
     where
         Self: Sized;
+    fn new_active(&mut self) -> Result<(), FsError>;
 }
 
 pub struct ConcreteSystem {
+    fd_num: AtomicUsize,
     active: Fd,
-    active_file: File,
+    map: HashMap<Fd, File>,
+    cask_path: PathBuf,
 }
 
 impl ConcreteSystem {
-    fn new(path: impl AsRef<Path>) -> Result<Self, FsError> {
-        let path = path.as_ref().join("active.db");
+    fn new(cask_path: impl Into<PathBuf>) -> Self {
+        ConcreteSystem {
+            fd_num: AtomicUsize::new(1),
+            active: Fd(1),
+            map: HashMap::new(),
+            cask_path: cask_path.into(),
+        }
+    }
+
+    fn next_fd(&self) -> Fd {
+        Fd(self.fd_num.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn create_or_swap_active(&mut self) -> Result<(), FsError> {
+        let has_active = fs::read_dir(self.cask_path.clone())?
+            .any(|entry| entry.map_or(false, |entry| entry.file_name() == "active.db"));
+
+        if has_active {
+            // we have an existing active file, move it into immutable
+            let current_active = self.cask_path.join("active.db");
+            let active_fd = self.active().0;
+            let new_immutable = self.cask_path.join(format!("immutable-{active_fd}.db"));
+
+            fs::rename(current_active, &new_immutable)?;
+            let fd = self.next_fd();
+            let new_immutable_file = File::open(new_immutable)?;
+            self.map.insert(fd, new_immutable_file);
+        }
+
+        // Create new active file
+        let active_path = self.cask_path.join("active.db");
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
-            .open(dbg!(path))?;
-        Ok(ConcreteSystem {
-            active: Fd(0),
-            active_file: file,
-        })
+            .open(dbg!(active_path))?;
+
+        let fd = self.next_fd();
+        self.map.insert(fd, file);
+
+        self.active = fd;
+
+        Ok(())
     }
 }
 
 impl FileSystem for ConcreteSystem {
-    fn create_write(path: impl AsRef<Path>) -> Result<Self, FsError> {
-        ConcreteSystem::new(path)
+    fn init(path: impl Into<PathBuf>) -> Result<Self, FsError> {
+        let mut system = ConcreteSystem::new(path);
+        system.new_active()?;
+
+        Ok(system)
+    }
+
+    fn new_active(&mut self) -> Result<(), FsError> {
+        self.create_or_swap_active()?;
+        Ok(())
     }
 
     #[instrument(skip(self, buf))]
-    fn write_at(&self, _file: Fd, buf: &[u8], offset: u64) -> io::Result<usize> {
-        trace!(active_file = ?self.active_file, write_size = buf.len(), "Writing buf into active file");
-        self.active_file.write_at(buf, offset)
+    fn write_at(&self, file: Fd, buf: &[u8], offset: u64) -> io::Result<usize> {
+        if let Some(file) = self.map.get(&file) {
+            trace!(file = ?file, write_size = buf.len(), "Writing buf into file");
+            return file.write_at(buf, offset);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Unable to fine file with fd: {}", file),
+        ))
     }
 
     #[instrument(skip(self, buf))]
-    fn read_exact_at(&self, _file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()> {
-        trace!(active_file = ?self.active_file, read_size = buf.len(), "Reading into buf from active file");
-        self.active_file.read_exact_at(buf, offset)
+    fn read_exact_at(&self, file: Fd, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        if let Some(file) = self.map.get(&file) {
+            trace!(file = ?file, read_size = buf.len(), "Reading into buf from file");
+            return file.read_exact_at(buf, offset);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Unable to fine file with fd: {}", file),
+        ))
     }
 
     #[instrument(skip(self))]
-    fn file_size(&self, _file: Fd) -> io::Result<u64> {
-        trace!("Reading metadata for active file");
-        Ok(self.active_file.metadata()?.len())
+    fn file_size(&self, file: Fd) -> io::Result<u64> {
+        if let Some(file) = self.map.get(&file) {
+            trace!("Reading metadata for active file");
+            return Ok(file.metadata()?.len());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Unable to fine file with fd: {}", file),
+        ))
     }
 
     #[instrument(skip(self))]
-    fn flush(&mut self, _file: Fd) -> io::Result<()> {
-        trace!("Flushing to disk");
-        self.active_file.flush()
+    fn flush(&mut self, file: Fd) -> io::Result<()> {
+        if let Some(file) = self.map.get_mut(&file) {
+            trace!("Flushing to disk");
+            return Ok(file.flush()?);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Unable to fine file with fd: {}", file),
+        ))
     }
 
     fn active(&self) -> Fd {
