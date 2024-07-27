@@ -1,4 +1,6 @@
 use std::{
+    collections::HashMap,
+    hash::Hash,
     io::{self, Write},
     sync::RwLock,
 };
@@ -7,13 +9,13 @@ use crate::fs::{Fd, FileSystem};
 
 /// A test file system
 pub struct TestFileSystem {
-    buf: RwLock<Vec<u8>>,
+    buf: RwLock<HashMap<Fd, Vec<u8>>>,
 }
 
 impl TestFileSystem {
     pub fn new() -> Self {
         Self {
-            buf: RwLock::new(Vec::with_capacity(4096)),
+            buf: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -59,10 +61,14 @@ impl FileSystem for TestFileSystem {
         Fd::new_empty()
     }
 
-    fn create_write(_path: impl AsRef<std::path::Path>) -> Result<Self, crate::fs::FsError>
+    fn init(path: impl Into<std::path::PathBuf>) -> Result<Self, crate::fs::FsError>
     where
         Self: Sized,
     {
-        Ok(TestFileSystem::new())
+        todo!()
+    }
+
+    fn new_active(&mut self) -> Result<(), crate::fs::FsError> {
+        todo!()
     }
 }

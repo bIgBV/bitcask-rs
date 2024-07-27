@@ -2,10 +2,9 @@ use core::fmt;
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    hash::Hash,
     io::{self, Write},
     os::unix::fs::FileExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
         RwLock,
@@ -125,9 +124,7 @@ where
     }
 
     pub fn swap_active(&self) -> Result<(), FsError> {
-        let inner = self.inner.write().expect("Unable to lock fs inner ");
-
-        Ok(())
+        self.inner.write().unwrap().fs_impl.new_active()
     }
 }
 

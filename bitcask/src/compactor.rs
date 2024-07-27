@@ -57,7 +57,7 @@ impl<'entry> Compactor<'entry> {
         }
     }
 
-    pub fn handle_input(&mut self, input: Input<'_>) {
+    pub fn handle_input(&mut self, input: Input<'entry>) {
         match self.state {
             // Don't need to do anything in this state.
             State::Wait(_at) => {}
@@ -66,12 +66,12 @@ impl<'entry> Compactor<'entry> {
                 // If the file exists and entries are present, we are actively compacting
                 match input {
                     Input::Entry(entry) => {
-                        if entry.is_tombstone() {
-                            self.operations.push_back(Operation::Ignore);
-                        } else {
-                            self.operations
-                                .push_back(Operation::CheckKeydir(entry.key()));
-                        }
+                        //if entry.is_tombstone() {
+                        //    self.operations.push_back(Operation::Ignore);
+                        //} else {
+                        //    self.operations
+                        //        .push_back(Operation::CheckKeydir(entry.key()));
+                        //}
                     }
                     Input::MatchKeydir => {
                         self.operations.push_back(Operation::AddImmutable);
