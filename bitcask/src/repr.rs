@@ -133,6 +133,14 @@ impl<'input> Entry<'input> {
     pub fn len(&self) -> usize {
         (Header::LEN + self.header.key_size as u64 + self.header.value_size as u64) as usize
     }
+
+    pub fn is_tombstone(&self) -> bool {
+        self.header.tombstone == Header::IS_DELETED
+    }
+
+    pub fn key(&self) -> &[u8] {
+        self.key
+    }
 }
 
 #[derive(Debug)]

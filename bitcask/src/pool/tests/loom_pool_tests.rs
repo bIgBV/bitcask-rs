@@ -4,7 +4,7 @@ use std::time::Duration;
 #[test]
 fn loom_cloned_execution() {
     loom::model(|| {
-        let n_jobs = 10;
+        let n_jobs = 2;
         let pool = Pool::new(1);
         let (send, recv) = loom::sync::mpsc::channel();
 

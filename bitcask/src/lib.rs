@@ -19,6 +19,8 @@ use fs::{Fd, FileSystem, Fs, FsError, Offset};
 use repr::{Entry, EntryError, Header, OwnedEntry, StoredData};
 use tracing::{debug, info, instrument};
 
+use crate::compactor::{Input, Operation};
+
 // todo add file ids
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheEntry {
@@ -181,14 +183,13 @@ impl<T> Cask<T>
 where
     T: System,
 {
+    #[instrument(skip(self))]
     pub(crate) fn compaction_loop(self: Self) {
         let mut compactor = Compactor::new();
 
-        loop {
-            while let Some(operation) = compactor.poll_transmit() {
-                println!("Handling operation: {:?}", operation);
-            }
-        }
+        let operation = compactor
+            .poll_transmit()
+            .expect("First poll is always present");
     }
 }
 

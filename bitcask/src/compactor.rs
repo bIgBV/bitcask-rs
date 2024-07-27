@@ -9,29 +9,43 @@
 //!         - Also create a new hintfile entry
 //!     - If it is not the same location, ignore this entry
 //!     - If it's a tombstone entry, ignore
-use std::{collections::VecDeque, time::Instant};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use crate::repr::{Entry, Header};
 
 enum State {
+    /// Stores the instant when we went into the wait state, along with the current instant
     Wait(Instant),
+
+    /// Compact state
     Compact,
 }
 
 #[derive(Debug)]
-pub(crate) enum Operation<'file> {
+pub(crate) enum Operation<'entry> {
     Ignore,
     CheckFile,
-    AddImmutable(Entry<'file>),
-    AddHint(Header),
+    CheckKeydir(&'entry [u8]),
+    AddImmutable,
+    AddHint,
 }
 
-pub(crate) struct Compactor<'file> {
-    operations: VecDeque<Operation<'file>>,
+pub(crate) struct Compactor<'entry> {
+    operations: VecDeque<Operation<'entry>>,
     state: State,
 }
 
-impl<'file> Compactor<'file> {
+pub(crate) enum Input<'file> {
+    Entry(Entry<'file>),
+    End(Instant),
+    MatchKeydir,
+    NotMatchkeydir,
+}
+
+impl<'entry> Compactor<'entry> {
     pub fn new() -> Self {
         let mut queue = VecDeque::new();
         queue.push_back(Operation::CheckFile);
@@ -43,23 +57,56 @@ impl<'file> Compactor<'file> {
         }
     }
 
-    pub fn handle_input(&self, entry: Option<Entry<'file>>) {
+    pub fn handle_input(&mut self, input: Input<'_>) {
         match self.state {
-            State::Wait(_) => {}
+            // Don't need to do anything in this state.
+            State::Wait(_at) => {}
+
             State::Compact => {
                 // If the file exists and entries are present, we are actively compacting
-                if let Some(entry) = entry {}
+                match input {
+                    Input::Entry(entry) => {
+                        if entry.is_tombstone() {
+                            self.operations.push_back(Operation::Ignore);
+                        } else {
+                            self.operations
+                                .push_back(Operation::CheckKeydir(entry.key()));
+                        }
+                    }
+                    Input::MatchKeydir => {
+                        self.operations.push_back(Operation::AddImmutable);
+                        self.operations.push_back(Operation::AddHint)
+                    }
+                    Input::NotMatchkeydir => self.operations.push_back(Operation::Ignore),
+                    // We're reached the end of the file, switch to the wait state
+                    Input::End(now) => self.state = State::Wait(now),
+                }
             }
         }
     }
 
-    pub fn handle_timeout(&self, now: Instant) {}
+    pub fn handle_timeout(&mut self, now: Instant) {
+        let last_sleep = match self.state {
+            State::Wait(at) => at,
+            State::Compact => return,
+        };
 
-    pub fn poll_transmit(&mut self) -> Option<Operation<'file>> {
+        if last_sleep.duration_since(now) < Duration::from_secs(60 * 60) {
+            return;
+        }
+
+        self.operations.push_back(Operation::CheckFile);
+        self.state = State::Compact;
+    }
+
+    pub fn poll_transmit(&mut self) -> Option<Operation> {
         self.operations.pop_front()
     }
 
     pub fn poll_timeout(&self) -> Option<Instant> {
-        todo!()
+        match self.state {
+            State::Compact => None,
+            State::Wait(at) => Some(at + Duration::from_secs(60 * 60)),
+        }
     }
 }
