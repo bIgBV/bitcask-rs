@@ -76,6 +76,7 @@ where
         // Update our cursor into the active file
         inner.cursor += size as u64;
         Ok(CacheEntry {
+            fd: inner.fs_impl.active(),
             value_size: entry.header.value_size,
             offset: current,
             timestamp: entry.header.timestamp,

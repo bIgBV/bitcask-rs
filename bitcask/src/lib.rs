@@ -24,6 +24,7 @@ const ACTIVE_FILE_THRESHOLD: usize = 4096;
 // todo add file ids
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheEntry {
+    fd: Fd,
     value_size: u32,
     offset: Offset,
     timestamp: u64,
@@ -61,6 +62,7 @@ where
         let keydir = if size > 0 {
             info!(file_size = size, "Active db exists");
             let iterator = HeaderIter {
+                active_fd: fs.active_fd(),
                 fs: &fs,
                 current: Offset(0),
             };
@@ -218,6 +220,7 @@ where
 
 pub(crate) struct HeaderIter<'cask, T> {
     fs: &'cask Fs<T>,
+    active_fd: Fd,
     current: Offset,
 }
 
@@ -257,6 +260,7 @@ where
             };
 
             let cache_entry = CacheEntry {
+                fd: self.active_fd,
                 value_size: header.value_size,
                 offset: self.current,
                 timestamp: header.timestamp,
