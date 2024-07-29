@@ -152,6 +152,10 @@ impl Fd {
     pub fn new_empty() -> Self {
         Fd(0)
     }
+
+    pub fn increment(&mut self) {
+        self.0 = self.0 + 1;
+    }
 }
 
 impl fmt::Display for Fd {
@@ -177,6 +181,10 @@ pub trait FileSystem {
     fn new_active(&mut self) -> Result<(), FsError>;
 }
 
+/// Implements the FileSystem interface for an actual system.
+///
+/// This structure does not need to be threadsafe as it is used within the `Fs` struct and wrapped
+/// with a lock there.
 pub struct ConcreteSystem {
     fd_num: AtomicUsize,
     active: Fd,

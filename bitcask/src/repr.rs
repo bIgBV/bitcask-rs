@@ -143,13 +143,6 @@ impl<'input> Entry<'input> {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct OwnedEntry {
-    pub(crate) header: Header,
-    key: Vec<u8>,
-    value: Option<Vec<u8>>,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum EntryError {
     #[error("Error converting timestamp: {0}")]

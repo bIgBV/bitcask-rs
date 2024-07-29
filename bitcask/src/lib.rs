@@ -2,7 +2,7 @@ mod compactor;
 mod fs;
 mod pool;
 mod repr;
-mod test;
+pub mod test;
 
 use compactor::Compactor;
 pub use fs::ConcreteSystem;
@@ -16,29 +16,26 @@ use std::{
 
 use bytemuck::PodCastError;
 use fs::{Fd, FileSystem, Fs, FsError, Offset};
-use repr::{Entry, EntryError, Header, OwnedEntry, StoredData};
+use repr::{Entry, EntryError, Header, StoredData};
 use tracing::{debug, info, instrument};
 
-const ACTIVE_FILE_THRESHOLD: usize = 4096;
-
-// todo add file ids
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct CacheEntry {
-    fd: Fd,
-    value_size: u32,
-    offset: Offset,
-    timestamp: u64,
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub active_threshold: usize,
 }
 
-impl CacheEntry {
-    pub fn data_offset(&self) -> Offset {
-        Offset(self.offset.0 + Header::LEN as usize)
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            active_threshold: 4096,
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct Cask<T> {
     inner: Arc<Inner<T>>,
+    config: Config,
 }
 
 struct Inner<T> {
@@ -53,7 +50,7 @@ where
     T: System,
 {
     #[instrument]
-    pub fn new(path: &str) -> Result<Self, CaskError> {
+    pub fn new_with_config(path: &str, config: Config) -> Result<Self, CaskError> {
         let fs_impl = T::init(path)?;
         let fs = Fs::new(fs_impl)?;
 
@@ -87,7 +84,13 @@ where
                 keydir: RwLock::new(keydir),
                 pool: Pool::new(4),
             }),
+            config,
         })
+    }
+
+    #[instrument]
+    pub fn new(path: &str) -> Result<Self, CaskError> {
+        Cask::new_with_config(path, Config::default())
     }
 
     pub fn init(self) -> Self {
@@ -96,7 +99,10 @@ where
             // Create a new Cask instance which is a copy of the innser struct to ensure that the
             // whole clone is moved into each background thread closure.
             let new_inner = self.inner.clone();
-            let new_cask = Cask { inner: new_inner };
+            let new_cask = Cask {
+                inner: new_inner,
+                config: Config::default(),
+            };
 
             self.inner.pool.execute(move || {
                 new_cask.compaction_loop();
@@ -116,7 +122,7 @@ where
         let entry = self.inner.fs.write_entry(entry)?;
 
         // A branch requring a mutex on every insert could get expensive
-        if self.inner.fs.active_size()? as usize >= ACTIVE_FILE_THRESHOLD {
+        if self.inner.fs.active_size()? as usize >= self.config.active_threshold {
             self.inner.fs.swap_active()?;
         }
 
@@ -175,14 +181,6 @@ where
         }
         Ok(())
     }
-
-    pub(crate) fn entry_iter(&self, fd: Fd) -> EntryIter<'_, T> {
-        EntryIter {
-            fs: &self.inner.fs,
-            current: Offset(0),
-            fd,
-        }
-    }
 }
 
 // Compaction impl
@@ -197,24 +195,6 @@ where
         let operation = compactor
             .poll_transmit()
             .expect("First poll is always present");
-    }
-}
-
-pub(crate) struct EntryIter<'cask, T> {
-    fs: &'cask Fs<T>,
-    current: Offset,
-    fd: Fd,
-}
-
-impl<'cask, T> Iterator for EntryIter<'cask, T>
-where
-    T: System,
-{
-    type Item = Result<OwnedEntry, CaskError>;
-
-    #[instrument(skip(self))]
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
     }
 }
 
@@ -292,4 +272,18 @@ pub enum CaskError {
 
     #[error("Entry not found")]
     NotFound,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct CacheEntry {
+    fd: Fd,
+    value_size: u32,
+    offset: Offset,
+    timestamp: u64,
+}
+
+impl CacheEntry {
+    pub fn data_offset(&self) -> Offset {
+        Offset(self.offset.0 + Header::LEN as usize)
+    }
 }
