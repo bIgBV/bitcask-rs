@@ -1,3 +1,5 @@
+#![feature(error_generic_member_access)]
+
 mod compactor;
 mod fs;
 mod pool;

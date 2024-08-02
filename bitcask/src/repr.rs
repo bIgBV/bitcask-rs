@@ -1,4 +1,5 @@
 use std::{
+    backtrace::Backtrace,
     mem,
     time::{SystemTime, SystemTimeError},
 };
@@ -145,6 +146,10 @@ impl<'input> Entry<'input> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EntryError {
-    #[error("Error converting timestamp: {0}")]
-    Time(#[from] SystemTimeError),
+    #[error("Error converting timestamp: {source}")]
+    Time {
+        #[from]
+        source: SystemTimeError,
+        backtrace: Backtrace,
+    },
 }

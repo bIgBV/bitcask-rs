@@ -11,12 +11,12 @@ use crate::{
 
 /// A test file system
 pub struct TestFileSystem {
-    buffers: RwLock<HashMap<Fd, Vec<u8>>>,
+    buffers: RwLock<HashMap<Fd, TestFile>>,
     active: Fd,
 }
 
 impl TestFileSystem {
-    pub fn new(fd: Fd, map: HashMap<Fd, Vec<u8>>) -> Self {
+    pub fn new(fd: Fd, map: HashMap<Fd, TestFile>) -> Self {
         Self {
             buffers: RwLock::new(map),
             active: fd,
@@ -33,7 +33,9 @@ impl FileSystem for TestFileSystem {
             .write()
             .unwrap()
             .get_mut(&file)
-            .map(|file_buf| file_buf.splice(offset..offset + buf.len(), buf))
+            .map(|file_buf| {
+                file_buf.write_at(offset, &buf);
+            })
             .ok_or(io::Error::new(
                 io::ErrorKind::NotFound,
                 "Unable to find file buf",
@@ -95,7 +97,7 @@ impl FileSystem for TestFileSystem {
     {
         let fd = Fd::new_empty();
         let mut map = HashMap::new();
-        map.insert(fd.clone(), vec![]);
+        map.insert(fd.clone(), TestFile::new());
 
         Ok(TestFileSystem::new(fd, map))
     }
@@ -106,7 +108,7 @@ impl FileSystem for TestFileSystem {
         self.buffers
             .write()
             .unwrap()
-            .insert(self.active.clone(), vec![]);
+            .insert(self.active.clone(), TestFile::new());
 
         Ok(())
     }
@@ -117,3 +119,29 @@ impl ClockSource for TestFileSystem {}
 impl System for TestFileSystem {}
 unsafe impl Send for TestFileSystem {}
 unsafe impl Sync for TestFileSystem {}
+
+struct TestFile {
+    buf: Vec<u8>,
+}
+
+impl TestFile {
+    fn new() -> Self {
+        Self { buf: vec![0; 64] }
+    }
+
+    fn write_at(&mut self, offset: usize, buf: &[u8]) {
+        let buf_end = offset + buf.len();
+
+        if buf_end > self.buf.len() {
+            self.buf.resize(buf_end, 0);
+        }
+
+        for i in 0..buf.len() {
+            self.buf[offset + i] = buf[i]
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
+}

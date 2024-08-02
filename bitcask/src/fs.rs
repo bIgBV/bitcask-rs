@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    backtrace::Backtrace,
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{self, Write},
@@ -137,8 +138,12 @@ impl<T> Fs<T> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum FsError {
-    #[error("IoError: {0}")]
-    Io(#[from] io::Error),
+    #[error("IoError: {source}")]
+    Io {
+        #[from]
+        source: io::Error,
+        backtrace: Backtrace,
+    },
 }
 
 /// Represents a file descriptor
