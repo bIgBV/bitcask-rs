@@ -1,10 +1,12 @@
 use std::{
+    borrow::BorrowMut,
+    cell::RefCell,
     collections::HashMap,
     io::{self, Write},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
-use tracing::{info, instrument};
+use tracing::{info, instrument, trace};
 
 use crate::{
     fs::{Fd, FileSystem},
@@ -13,7 +15,7 @@ use crate::{
 
 /// A test file system
 pub struct TestFileSystem {
-    inner: Arc<RwLock<TestFsInner>>,
+    inner: Arc<RefCell<TestFsInner>>,
 }
 
 struct TestFsInner {
@@ -32,7 +34,7 @@ impl Clone for TestFileSystem {
 impl TestFileSystem {
     fn new(fd: Fd, map: HashMap<Fd, TestFile>) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(TestFsInner {
+            inner: Arc::new(RefCell::new(TestFsInner {
                 buffers: map,
                 active: fd,
             })),
@@ -40,7 +42,7 @@ impl TestFileSystem {
     }
 
     pub fn num_files(&self) -> usize {
-        self.inner.read().unwrap().buffers.len()
+        self.inner.as_ref().borrow().buffers.len()
     }
 }
 
@@ -51,8 +53,8 @@ impl FileSystem for TestFileSystem {
         let buf = buf.to_owned();
         let len = buf.len();
         self.inner
-            .write()
-            .unwrap()
+            .as_ref()
+            .borrow_mut()
             .buffers
             .get_mut(&file)
             .map(|file_buf| {
@@ -72,7 +74,7 @@ impl FileSystem for TestFileSystem {
         mut buf: &mut [u8],
         offset: u64,
     ) -> std::io::Result<()> {
-        let buf_handle = &self.inner.read().unwrap().buffers;
+        let buf_handle = &self.inner.as_ref().borrow().buffers;
 
         let Some(file_buf) = buf_handle.get(&file) else {
             return Err(io::Error::new(
@@ -97,11 +99,14 @@ impl FileSystem for TestFileSystem {
 
     fn file_size(&self, file: crate::fs::Fd) -> std::io::Result<u64> {
         self.inner
-            .write()
-            .unwrap()
+            .as_ref()
+            .borrow()
             .buffers
-            .get_mut(&file)
-            .map(|file_buf| file_buf.len() as u64)
+            .get(&file)
+            .map(|file_buf| {
+                trace!(file = ?file, len = file_buf.len(), "File size");
+                file_buf.len() as u64
+            })
             .ok_or(io::Error::new(
                 io::ErrorKind::NotFound,
                 "Unable to find file buf",
@@ -113,7 +118,7 @@ impl FileSystem for TestFileSystem {
     }
 
     fn active(&self) -> crate::fs::Fd {
-        self.inner.read().unwrap().active
+        self.inner.as_ref().borrow().active
     }
 
     fn init(_path: impl Into<std::path::PathBuf>) -> Result<Self, crate::fs::FsError>
@@ -127,14 +132,19 @@ impl FileSystem for TestFileSystem {
         Ok(TestFileSystem::new(fd, map))
     }
 
+    #[instrument(skip(self))]
     fn new_active(&mut self) -> Result<(), crate::fs::FsError> {
-        self.inner.write().unwrap().active.increment();
+        self.inner.as_ref().borrow_mut().active.increment();
+        let new_active = self.inner.as_ref().borrow().active.clone();
 
+        self.inner.as_ref().borrow_mut().active = new_active;
+
+        trace!("Swapping current active file");
         self.inner
-            .write()
-            .unwrap()
+            .as_ref()
+            .borrow_mut()
             .buffers
-            .insert(self.inner.read().unwrap().active.clone(), TestFile::new());
+            .insert(new_active, TestFile::new());
 
         Ok(())
     }

@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, RwLock,
+        RwLock,
     },
 };
 
@@ -124,7 +124,9 @@ where
         inner.fs_impl.active()
     }
 
+    #[instrument(skip(self))]
     pub fn swap_active(&self) -> Result<(), FsError> {
+        trace!("Swapping active file");
         self.inner.write().unwrap().fs_impl.new_active()
     }
 }
