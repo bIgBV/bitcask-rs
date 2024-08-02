@@ -1,5 +1,4 @@
 use std::{
-    borrow::BorrowMut,
     cell::RefCell,
     collections::HashMap,
     io::{self, Write},
@@ -18,6 +17,7 @@ pub struct TestFileSystem {
     inner: Arc<RefCell<TestFsInner>>,
 }
 
+#[derive(Debug)]
 struct TestFsInner {
     buffers: HashMap<Fd, TestFile>,
     active: Fd,
@@ -84,8 +84,7 @@ impl FileSystem for TestFileSystem {
         };
 
         let offset = offset as usize;
-
-        if file_buf.len() < offset || (offset + buf.len()) < file_buf.len() {
+        if dbg!(file_buf.len() < offset) || dbg!((offset + buf.len()) > file_buf.len()) {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "reading past the end of the buffer",
@@ -133,7 +132,7 @@ impl FileSystem for TestFileSystem {
     }
 
     #[instrument(skip(self))]
-    fn new_active(&mut self) -> Result<(), crate::fs::FsError> {
+    fn new_active(&mut self) -> Result<Fd, crate::fs::FsError> {
         self.inner.as_ref().borrow_mut().active.increment();
         let new_active = self.inner.as_ref().borrow().active.clone();
 
@@ -146,7 +145,7 @@ impl FileSystem for TestFileSystem {
             .buffers
             .insert(new_active, TestFile::new());
 
-        Ok(())
+        Ok(new_active)
     }
 }
 
@@ -156,6 +155,7 @@ impl ClockSource for TestFileSystem {}
 unsafe impl Send for TestFileSystem {}
 unsafe impl Sync for TestFileSystem {}
 
+#[derive(Debug)]
 struct TestFile {
     buf: Vec<u8>,
     pos: usize,
@@ -182,7 +182,7 @@ impl TestFile {
         self.pos += buf.len();
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, buf))]
     fn read_at(&self, offset: usize, mut buf: &mut [u8]) -> io::Result<usize> {
         // TODO: handle reads past the cursor
         info!(
@@ -190,7 +190,7 @@ impl TestFile {
             file_len = self.buf.len(),
             "reading from test file"
         );
-        buf.write(&self.buf[offset..buf.len()])
+        buf.write(&self.buf[offset..offset + buf.len()])
     }
 
     fn len(&self) -> usize {

@@ -26,13 +26,13 @@ pub struct Offset(pub usize);
 #[derive(Debug)]
 pub(crate) struct Fs<T> {
     inner: RwLock<FsInner<T>>,
-    active_fd: Fd,
 }
 
 #[derive(Debug)]
 struct FsInner<T> {
     fs_impl: T,
     cursor: u64,
+    active_fd: Fd,
 }
 
 impl<T> Fs<T>
@@ -45,8 +45,8 @@ where
             inner: RwLock::new(FsInner {
                 fs_impl: fs,
                 cursor: 0,
+                active_fd: active,
             }),
-            active_fd: active,
         })
     }
 
@@ -62,15 +62,16 @@ where
 
         // Get write lock on inner struct to linearize writes to the WAL in the active db file.
         let mut inner = self.inner.write().expect("Unable to lock active file");
+        let current_active = inner.active_fd;
 
         debug!(pos = inner.cursor);
 
         while size < buf.len() {
-            size += inner.fs_impl.write_at(self.active_fd, &buf, inner.cursor)?;
+            size += inner.fs_impl.write_at(current_active, &buf, inner.cursor)?;
         }
 
         // Flush to ensure write is persisted
-        inner.fs_impl.flush(self.active_fd)?;
+        inner.fs_impl.flush(current_active)?;
 
         let current = Offset(inner.cursor as usize);
         // Update our cursor into the active file
@@ -94,7 +95,7 @@ where
 
         inner
             .fs_impl
-            .read_exact_at(self.active_fd, buf, offset.0 as u64)?;
+            .read_exact_at(inner.active_fd, buf, offset.0 as u64)?;
 
         Ok(())
     }
@@ -116,18 +117,24 @@ where
 
     pub fn active_size(&self) -> Result<u64, FsError> {
         let inner = self.inner.read().expect("Unable to lock active file");
-        Ok(inner.fs_impl.file_size(self.active_fd)?)
+        Ok(inner.fs_impl.file_size(inner.active_fd)?)
     }
 
     pub fn active_fd(&self) -> Fd {
         let inner = self.inner.read().expect("Unable to lock active file");
-        inner.fs_impl.active()
+        inner.active_fd
     }
 
     #[instrument(skip(self))]
     pub fn swap_active(&self) -> Result<(), FsError> {
-        trace!("Swapping active file");
-        self.inner.write().unwrap().fs_impl.new_active()
+        let mut inner = self.inner.write().unwrap();
+        let new_active = inner.fs_impl.new_active()?;
+        trace!(new_active = ?new_active, "Swapping active file");
+
+        // Update the active Fd and make sure to reset the cursor into the new file
+        inner.active_fd = new_active;
+        inner.cursor = 0;
+        Ok(())
     }
 }
 
@@ -185,7 +192,7 @@ pub trait FileSystem {
     fn init(path: impl Into<PathBuf>) -> Result<Self, FsError>
     where
         Self: Sized;
-    fn new_active(&mut self) -> Result<(), FsError>;
+    fn new_active(&mut self) -> Result<Fd, FsError>;
 }
 
 /// Implements the FileSystem interface for an actual system.
@@ -213,7 +220,7 @@ impl ConcreteSystem {
         Fd(self.fd_num.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn create_or_swap_active(&mut self) -> Result<(), FsError> {
+    fn create_or_swap_active(&mut self) -> Result<Fd, FsError> {
         let has_active = fs::read_dir(self.cask_path.clone())?
             .any(|entry| entry.map_or(false, |entry| entry.file_name() == "active.db"));
 
@@ -242,7 +249,7 @@ impl ConcreteSystem {
 
         self.active = fd;
 
-        Ok(())
+        Ok(fd)
     }
 }
 
@@ -254,9 +261,8 @@ impl FileSystem for ConcreteSystem {
         Ok(system)
     }
 
-    fn new_active(&mut self) -> Result<(), FsError> {
-        self.create_or_swap_active()?;
-        Ok(())
+    fn new_active(&mut self) -> Result<Fd, FsError> {
+        Ok(self.create_or_swap_active()?)
     }
 
     #[instrument(skip(self, buf))]

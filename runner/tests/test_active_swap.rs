@@ -1,7 +1,7 @@
-use std::sync::{Arc, Once};
+use std::sync::Once;
 
 use anyhow::Result;
-use bitcask::{test::TestFileSystem, Cask, Config, FileSystem, System};
+use bitcask::{test::TestFileSystem, Cask, Config, FileSystem};
 use tracing::Level;
 
 use pretty_assertions::assert_eq;
@@ -29,11 +29,14 @@ fn test_active_file_swap() -> Result<()> {
         test_fs.clone(),
     )?;
 
-    for i in 0..512 {
-        cask.insert("entry", format!("{}", i))?;
+    for _ in 0..512 {
+        cask.insert("entry", "1")?;
     }
 
-    assert_eq!(test_fs.num_files(), 2);
+    // Each entry requiring a header adds a lot of overhead
+    assert_eq!(test_fs.num_files(), 40);
+
+    assert_eq!(cask.get(&"entry")?, "1".as_bytes());
 
     Ok(())
 }
