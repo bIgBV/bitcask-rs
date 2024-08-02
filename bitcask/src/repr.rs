@@ -8,8 +8,7 @@ use bytemuck::{bytes_of, Pod, Zeroable};
 
 /// Database entry header
 ///
-/// We want to ensure the struct is packed for cleaner de/serialization. This struct should never be
-/// stored in a cache senstivie manner.
+/// We want to ensure the struct is packed for cleaner de/serialization
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C, packed)]
 pub(crate) struct Header {

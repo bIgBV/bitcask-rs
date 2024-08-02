@@ -122,6 +122,18 @@ where
     }
 
     /// Inserts a new entry into the data store
+    ///
+    /// The keys and values should be serializable, which is done via the `StoredData` trait.
+    ///
+    /// ```rust
+    /// # use std::error::Error;
+    /// # use bitcask::{Cask, test::TestFileSystem};
+    /// # fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    ///     let cask: Cask<TestFileSystem> = Cask::new("")?;
+    ///     cask.insert("hello", "world")?;
+    ///     # Ok(())
+    /// # }
+    /// ```
     pub fn insert<K, V>(&self, key: K, value: V) -> Result<(), CaskError>
     where
         K: StoredData + Hash + Eq,
@@ -151,6 +163,17 @@ where
     }
 
     /// Gets an entry from the data store if it's present
+    ///
+    /// ```rust
+    /// # use std::error::Error;
+    /// # use bitcask::{Cask, test::TestFileSystem};
+    /// # fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    ///     let cask: Cask<TestFileSystem> = Cask::new("")?;
+    ///     cask.insert("hello", "world")?;
+    ///     assert_eq!(cask.get(&"hello")?, "world".as_bytes());
+    ///     # Ok(())
+    /// # }
+    /// ```
     pub fn get<K>(&self, key: &K) -> Result<Vec<u8>, CaskError>
     where
         K: StoredData + Hash + Eq,
