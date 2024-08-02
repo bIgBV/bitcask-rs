@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
     io::{self, Write},
-    sync::RwLock,
+    sync::{Arc, RwLock},
 };
+
+use tracing::{info, instrument};
 
 use crate::{
     fs::{Fd, FileSystem},
@@ -11,29 +13,50 @@ use crate::{
 
 /// A test file system
 pub struct TestFileSystem {
-    buffers: RwLock<HashMap<Fd, TestFile>>,
+    inner: Arc<RwLock<TestFsInner>>,
+}
+
+struct TestFsInner {
+    buffers: HashMap<Fd, TestFile>,
     active: Fd,
 }
 
-impl TestFileSystem {
-    pub fn new(fd: Fd, map: HashMap<Fd, TestFile>) -> Self {
-        Self {
-            buffers: RwLock::new(map),
-            active: fd,
+impl Clone for TestFileSystem {
+    fn clone(&self) -> Self {
+        TestFileSystem {
+            inner: Arc::clone(&self.inner),
         }
     }
 }
 
+impl TestFileSystem {
+    fn new(fd: Fd, map: HashMap<Fd, TestFile>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(TestFsInner {
+                buffers: map,
+                active: fd,
+            })),
+        }
+    }
+
+    pub fn num_files(&self) -> usize {
+        self.inner.read().unwrap().buffers.len()
+    }
+}
+
 impl FileSystem for TestFileSystem {
+    #[instrument(skip(self, buf))]
     fn write_at(&self, file: Fd, buf: &[u8], offset: u64) -> std::io::Result<usize> {
         let offset = offset as usize;
         let buf = buf.to_owned();
         let len = buf.len();
-        self.buffers
+        self.inner
             .write()
             .unwrap()
+            .buffers
             .get_mut(&file)
             .map(|file_buf| {
+                info!(fd = ?file, len = buf.len(), "Writing to file");
                 file_buf.write_at(offset, &buf);
             })
             .ok_or(io::Error::new(
@@ -49,7 +72,7 @@ impl FileSystem for TestFileSystem {
         mut buf: &mut [u8],
         offset: u64,
     ) -> std::io::Result<()> {
-        let buf_handle = self.buffers.read().unwrap();
+        let buf_handle = &self.inner.read().unwrap().buffers;
 
         let Some(file_buf) = buf_handle.get(&file) else {
             return Err(io::Error::new(
@@ -67,14 +90,16 @@ impl FileSystem for TestFileSystem {
             ));
         }
 
-        buf.write(&file_buf[offset as usize..buf.len()])?;
+        info!(fd = ?file, len = buf.len(), "Reading from file");
+        file_buf.read_at(offset, &mut buf)?;
         Ok(())
     }
 
     fn file_size(&self, file: crate::fs::Fd) -> std::io::Result<u64> {
-        self.buffers
+        self.inner
             .write()
             .unwrap()
+            .buffers
             .get_mut(&file)
             .map(|file_buf| file_buf.len() as u64)
             .ok_or(io::Error::new(
@@ -88,7 +113,7 @@ impl FileSystem for TestFileSystem {
     }
 
     fn active(&self) -> crate::fs::Fd {
-        self.active
+        self.inner.read().unwrap().active
     }
 
     fn init(_path: impl Into<std::path::PathBuf>) -> Result<Self, crate::fs::FsError>
@@ -103,30 +128,35 @@ impl FileSystem for TestFileSystem {
     }
 
     fn new_active(&mut self) -> Result<(), crate::fs::FsError> {
-        self.active.increment();
+        self.inner.write().unwrap().active.increment();
 
-        self.buffers
+        self.inner
             .write()
             .unwrap()
-            .insert(self.active.clone(), TestFile::new());
+            .buffers
+            .insert(self.inner.read().unwrap().active.clone(), TestFile::new());
 
         Ok(())
     }
 }
 
+impl System for TestFileSystem {}
 impl ClockSource for TestFileSystem {}
 
-impl System for TestFileSystem {}
 unsafe impl Send for TestFileSystem {}
 unsafe impl Sync for TestFileSystem {}
 
 struct TestFile {
     buf: Vec<u8>,
+    pos: usize,
 }
 
 impl TestFile {
     fn new() -> Self {
-        Self { buf: vec![0; 64] }
+        Self {
+            buf: vec![0; 64],
+            pos: 0,
+        }
     }
 
     fn write_at(&mut self, offset: usize, buf: &[u8]) {
@@ -139,9 +169,21 @@ impl TestFile {
         for i in 0..buf.len() {
             self.buf[offset + i] = buf[i]
         }
+        self.pos += buf.len();
+    }
+
+    #[instrument(skip(self))]
+    fn read_at(&self, offset: usize, mut buf: &mut [u8]) -> io::Result<usize> {
+        // TODO: handle reads past the cursor
+        info!(
+            offset = offset,
+            file_len = self.buf.len(),
+            "reading from test file"
+        );
+        buf.write(&self.buf[offset..buf.len()])
     }
 
     fn len(&self) -> usize {
-        self.buf.len()
+        self.pos
     }
 }

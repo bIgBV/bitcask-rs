@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        RwLock,
+        Arc, RwLock,
     },
 };
 

@@ -11,3 +11,4 @@ argh = "0.1.12"
 
 [dev-dependencies]
 anyhow = { version = "1.0.86", features = ["backtrace"] }
+pretty_assertions = "1.4.0"

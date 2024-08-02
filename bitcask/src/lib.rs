@@ -8,6 +8,7 @@ pub mod test;
 
 use compactor::Compactor;
 pub use fs::ConcreteSystem;
+pub use fs::FileSystem;
 use pool::Pool;
 
 use std::{
@@ -17,7 +18,7 @@ use std::{
 };
 
 use bytemuck::PodCastError;
-use fs::{Fd, FileSystem, Fs, FsError, Offset};
+use fs::{Fd, Fs, FsError, Offset};
 use repr::{Entry, EntryError, Header, StoredData};
 use tracing::{debug, info, instrument};
 
@@ -54,6 +55,12 @@ where
     #[instrument]
     pub fn new_with_config(path: &str, config: Config) -> Result<Self, CaskError> {
         let fs_impl = T::init(path)?;
+
+        Ok(Cask::new_with_fs_impl(path, config, fs_impl)?)
+    }
+
+    #[instrument(skip(fs_impl))]
+    pub fn new_with_fs_impl(path: &str, config: Config, fs_impl: T) -> Result<Self, CaskError> {
         let fs = Fs::new(fs_impl)?;
 
         let size = fs.active_size()?;
