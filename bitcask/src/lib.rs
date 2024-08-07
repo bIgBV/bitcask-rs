@@ -1,5 +1,11 @@
 #![feature(error_generic_member_access)]
 
+//! A embedded hash backed log structured key value store.
+//!
+//! [`Cask`] implements a variation of the data store described in the classic Bitcask paper. It is
+//! threadsafe, and supports pluggable storage _and_ system interfaces. This allows us to implement
+//! deterministic tests.
+
 mod compactor;
 mod fs;
 mod pool;
@@ -7,8 +13,7 @@ mod repr;
 pub mod test;
 
 use compactor::Compactor;
-pub use fs::ConcreteSystem;
-pub use fs::FileSystem;
+pub use fs::{ConcreteSystem, FileSystem};
 use pool::Pool;
 
 use std::{
@@ -22,8 +27,12 @@ use fs::{Fd, Fs, FsError, Offset};
 use repr::{Entry, EntryError, Header, StoredData};
 use tracing::{debug, info, instrument};
 
+/// Knobs for tuning the behavior of the data store.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Upper bound of the size of the active file in bytes.
+    ///
+    /// Note: the actual size on the file will be one entry larger than this threshold.
     pub active_threshold: usize,
 }
 

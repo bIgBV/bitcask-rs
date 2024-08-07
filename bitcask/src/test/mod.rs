@@ -13,6 +13,12 @@ use crate::{
 };
 
 /// A test file system
+///
+/// Implementors of the `FileSystem` trait do not need to be threadsafe (this might change in the
+/// future). Therefore, we can safely implement interior mutablity without using a locking scheme.
+///
+/// Interior mutability is required since we need to be able to modify the buffers backing the
+/// in-memory files in the file system.
 pub struct TestFileSystem {
     inner: Arc<RefCell<TestFsInner>>,
 }
