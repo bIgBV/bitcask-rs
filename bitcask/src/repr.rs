@@ -42,22 +42,6 @@ impl Header {
     }
 }
 
-pub trait StoredData {
-    fn as_bytes(&self) -> &[u8];
-}
-
-impl StoredData for String {
-    fn as_bytes(&self) -> &[u8] {
-        self.as_bytes()
-    }
-}
-
-impl StoredData for &str {
-    fn as_bytes(&self) -> &[u8] {
-        str::as_bytes(&self)
-    }
-}
-
 /// Represents an entry in a data file.
 #[derive(Debug)]
 pub struct Entry<'input> {
@@ -69,11 +53,11 @@ pub struct Entry<'input> {
 impl<'input> Entry<'input> {
     pub fn new_encoded<K, V>(key: &'input K, value: &'input V) -> Result<Entry<'input>, EntryError>
     where
-        K: StoredData,
-        V: StoredData,
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
     {
-        let key = key.as_bytes();
-        let val = value.as_bytes();
+        let key = key.as_ref();
+        let val = value.as_ref();
 
         let key_len = key.len();
         let val_len = val.len();
@@ -103,9 +87,9 @@ impl<'input> Entry<'input> {
     /// Creates an empty tombstone entry for deleted values
     pub fn new_empty<K>(key: &'input K) -> Entry<'input>
     where
-        K: StoredData,
+        K: AsRef<[u8]>,
     {
-        let key = key.as_bytes();
+        let key = key.as_ref();
         debug_assert!(key.len() < u16::MAX.into());
         Entry {
             header: Header {

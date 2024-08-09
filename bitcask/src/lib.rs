@@ -24,7 +24,7 @@ use std::{
 
 use bytemuck::PodCastError;
 use fs::{Fd, Fs, FsError, Offset};
-use repr::{Entry, EntryError, Header, StoredData};
+use repr::{Entry, EntryError, Header};
 use tracing::{debug, info, instrument};
 
 /// Knobs for tuning the behavior of the data store.
@@ -145,8 +145,8 @@ where
     /// ```
     pub fn insert<K, V>(&self, key: K, value: V) -> Result<(), CaskError>
     where
-        K: StoredData + Hash + Eq,
-        V: StoredData,
+        K: AsRef<[u8]> + Hash + Eq,
+        V: AsRef<[u8]>,
     {
         let entry = Entry::new_encoded(&key, &value)?;
         let entry = self.inner.fs.write_entry(entry)?;
@@ -158,7 +158,7 @@ where
 
         // TODO: Can we get away from allocating a whole new vec for every key?
         // IMO no? We need to own the data for the type in this container.
-        let key = key.as_bytes().into();
+        let key = key.as_ref().into();
 
         self.inner
             .keydir
@@ -185,10 +185,10 @@ where
     /// ```
     pub fn get<K>(&self, key: &K) -> Result<Vec<u8>, CaskError>
     where
-        K: StoredData + Hash + Eq,
+        K: AsRef<[u8]> + Hash + Eq,
     {
         let entry = self.inner.keydir.read().unwrap();
-        let Some(cache_entry) = entry.get(key.as_bytes()) else {
+        let Some(cache_entry) = entry.get(key.as_ref()) else {
             return Err(CaskError::NotFound);
         };
 
@@ -210,12 +210,12 @@ where
     /// Delete an entry from the data store
     pub fn remove<K>(&self, key: &K) -> Result<(), CaskError>
     where
-        K: StoredData + Hash + Eq,
+        K: AsRef<[u8]> + Hash + Eq,
     {
         // TODO: Can we get away from allocating a whole vec for every key?
         // IMO no? We need to own the data for the type in this container.
         let tombstone = Entry::new_empty(key);
-        let key = key.as_bytes().into();
+        let key = key.as_ref().into();
 
         if let Some(_) = self.inner.keydir.write().unwrap().remove(key) {
             let _entry = self.inner.fs.write_entry(tombstone)?;
