@@ -106,7 +106,7 @@ where
 
     pub fn active_size(&self) -> Result<u64, FsError> {
         let inner = self.inner.read().expect("Unable to lock active file");
-        Ok(inner.fs_impl.file_size(inner.active_fd)?)
+        Ok(inner.cursor)
     }
 
     pub fn active_fd(&self) -> Fd {

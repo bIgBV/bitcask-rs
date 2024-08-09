@@ -56,12 +56,12 @@ impl FileSystem for TestFileSystem {
     #[instrument(skip(self, buf))]
     fn write_at(&self, file: Fd, buf: &[u8], offset: u64) -> std::io::Result<usize> {
         let offset = offset as usize;
-        let buf = buf.to_owned();
         let len = buf.len();
-        self.inner
-            .as_ref()
-            .borrow_mut()
-            .buffers
+        let mut map = match self.inner.as_ref().try_borrow_mut() {
+            Ok(map) => map,
+            Err(err) => panic!("Unable to borrow: {:?}", err),
+        };
+        map.buffers
             .get_mut(&file)
             .map(|file_buf| {
                 info!(fd = ?file, len = buf.len(), "Writing to file");
@@ -142,7 +142,9 @@ impl FileSystem for TestFileSystem {
         self.inner.as_ref().borrow_mut().active.increment();
         let new_active = self.inner.as_ref().borrow().active.clone();
 
-        self.inner.as_ref().borrow_mut().active = new_active;
+        {
+            self.inner.as_ref().borrow_mut().active = new_active;
+        }
 
         trace!("Swapping current active file");
         self.inner

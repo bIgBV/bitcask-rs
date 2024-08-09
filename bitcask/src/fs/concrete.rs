@@ -1,12 +1,17 @@
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, Write},
+    os::unix::fs::FileExt,
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use tracing::{instrument, trace};
+
+use crate::{ClockSource, FileSystem, System};
+
+use super::{Fd, FsError};
 
 /// Implements the FileSystem interface for an actual system.
 ///
